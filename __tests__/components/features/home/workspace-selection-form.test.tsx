@@ -1,11 +1,21 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, vi, beforeEach, it } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { WorkspaceSelectionForm } from "../../../../src/components/features/home/workspace-selection-form";
-import AgentServerConversationService from "#/api/conversation-service/agent-server-conversation-service.api";
-import { useWorkspacesStore } from "#/stores/workspaces-store";
-import { LocalWorkspace } from "#/types/workspace";
+
+import {
+  HOME_SELECTED_WORKSPACE_PATH_KEY,
+  WorkspaceSelectionForm,
+} from "../../../../src/components/features/home/workspace-selection-form";
+import { WorkspaceDropdown } from "../../../../src/components/features/home/workspace-dropdown/workspace-dropdown";
+import WorkspacesService from "#/api/workspaces-service/workspaces-service.api";
+import { LocalWorkspace, LocalWorkspaceParent } from "#/types/workspace";
 
 const mockNavigate = vi.fn();
 const mockUseIsCreatingConversation = vi.fn();
@@ -56,31 +66,18 @@ vi.mock("@openhands/typescript-client/clients", async () => {
 
 mockUseIsCreatingConversation.mockReturnValue(false);
 
-function makeStartTask(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "conv-abc",
-    created_by_user_id: null,
-    status: "READY",
-    detail: null,
-    app_conversation_id: "conv-abc",
-    agent_server_url: "http://agent-server.local",
-    request: { initial_message: undefined, plugins: null },
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    ...overrides,
-  } as never;
-}
-
-function renderForm(
-  initialWorkspaces: LocalWorkspace[] = [],
-  initialParents: { id: string; name: string; path: string }[] = [],
-  props: { onConfirm?: (workspace: LocalWorkspace) => void } = {},
-) {
-  useWorkspacesStore.setState({
-    workspaces: initialWorkspaces,
-    workspaceParents: initialParents,
+function renderForm({
+  workspaces = [],
+  workspaceParents = [],
+}: {
+  workspaces?: LocalWorkspace[];
+  workspaceParents?: LocalWorkspaceParent[];
+} = {}) {
+  vi.spyOn(WorkspacesService, "listWorkspaces").mockResolvedValue({
+    workspaces,
+    workspaceParents,
   });
-  return render(<WorkspaceSelectionForm {...props} />, {
+  return render(<WorkspaceSelectionForm />, {
     wrapper: ({ children }) => (
       <QueryClientProvider
         client={
@@ -98,513 +95,472 @@ function renderForm(
   });
 }
 
-describe("WorkspaceSelectionForm", () => {
+async function openWorkspaceDropdown(user: ReturnType<typeof userEvent.setup>) {
+  const dropdown = await screen.findByTestId("workspace-dropdown");
+  await waitFor(() => expect(dropdown).not.toBeDisabled());
+  await user.click(dropdown);
+  return screen.findByTestId("workspace-dropdown-menu");
+}
+
+describe("WorkspaceDropdown", () => {
+  it.each([
+    {
+      testId: "add-workspaces-button",
+      expectedCallback: "add",
+    },
+    {
+      testId: "manage-workspaces-button",
+      expectedCallback: "manage",
+    },
+  ])(
+    "opens $expectedCallback workspace action from touch without bubbling",
+    async ({ testId, expectedCallback }) => {
+      const outsideTouchEnd = vi.fn();
+      const onAddClick = vi.fn();
+      const onManageClick = vi.fn();
+      const user = userEvent.setup();
+
+      render(
+        <div onTouchEnd={outsideTouchEnd}>
+          <WorkspaceDropdown
+            workspaces={[
+              {
+                id: "/Users/me/dev/repo1",
+                name: "repo1",
+                path: "/Users/me/dev/repo1",
+              },
+            ]}
+            value={null}
+            onChange={vi.fn()}
+            onAddClick={onAddClick}
+            onManageClick={onManageClick}
+          />
+        </div>,
+      );
+
+      await user.click(await screen.findByTestId("workspace-dropdown"));
+      const action = await screen.findByTestId(testId);
+
+      fireEvent.touchStart(action);
+      fireEvent.touchEnd(action);
+
+      expect(outsideTouchEnd).not.toHaveBeenCalled();
+      expect(onAddClick).toHaveBeenCalledTimes(
+        expectedCallback === "add" ? 1 : 0,
+      );
+      expect(onManageClick).toHaveBeenCalledTimes(
+        expectedCallback === "manage" ? 1 : 0,
+      );
+    },
+  );
+});
+
+describe("WorkspaceSelectionForm (server-backed workspaces)", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
+    mockNavigate.mockReset();
     mockSearchSubdirectories.mockReset();
     mockGetHome.mockReset();
+    window.sessionStorage.clear();
     mockUseIsCreatingConversation.mockReturnValue(false);
     mockGetHome.mockResolvedValue({ home: "/Users/me" });
-    useWorkspacesStore.setState({ workspaces: [], workspaceParents: [] });
-    // `useResolvedWorkspaces` always queries an implicit `/projects` parent
-    // (the dev:docker mount point). Default it to empty so tests that don't
-    // care about it don't hit a real network call. Tests that need specific
-    // behavior can replace this with their own spy.
+    // useResolvedWorkspaces always queries an implicit `/projects` parent in
+    // dev mode — return empty so it doesn't influence tests that don't care.
     mockSearchSubdirectories.mockResolvedValue({
       items: [],
       next_page_id: null,
     });
   });
 
-  it("Add Workspace adds only the chosen folder (not its subfolders) and dedupes on repeat", async () => {
-    mockGetHome.mockResolvedValue({ home: "/Users/me" });
-    const searchSpy = mockSearchSubdirectories;
-
-    mockSearchSubdirectories.mockImplementation(async (path: string) => {
-      if (path === "/Users/me") {
-        return {
-          items: [{ name: "dev", path: "/Users/me/dev" }],
-          next_page_id: null,
-        };
-      }
-      if (path === "/Users/me/dev") {
-        return {
-          items: [
-            { name: "repo1", path: "/Users/me/dev/repo1" },
-            { name: "repo2", path: "/Users/me/dev/repo2" },
-            { name: "repo3", path: "/Users/me/dev/repo3" },
-          ],
-          next_page_id: null,
-        };
-      }
-      throw new Error(`unexpected path ${path}`);
+  it("renders the default empty selection when no workspace path is persisted", async () => {
+    renderForm({
+      workspaces: [
+        {
+          id: "/Users/me/dev/repo1",
+          name: "repo1",
+          path: "/Users/me/dev/repo1",
+        },
+      ],
     });
 
-    // Pre-seed one workspace to verify dedup
-    renderForm([{ id: "/Users/me/dev", name: "dev", path: "/Users/me/dev" }]);
-    const user = userEvent.setup();
+    const dropdown = await screen.findByTestId("workspace-dropdown");
+    await waitFor(() => expect(dropdown).not.toBeDisabled());
 
-    // First pass: navigate into "dev" then click "Use this folder"
-    await user.click(screen.getByTestId("workspace-dropdown"));
-    await user.click(await screen.findByTestId("add-workspaces-button"));
-
-    await screen.findByTestId("folder-browser-modal");
+    expect(dropdown).toHaveValue("");
+    expect(screen.getByTestId("workspace-launch-button")).toBeDisabled();
     expect(
-      screen.queryByTestId("add-workspaces-button"),
-    ).not.toBeInTheDocument();
-
-    await user.click(await screen.findByTestId("folder-browser-entry-dev"));
-    await screen.findByTestId("folder-browser-entry-repo2");
-    await user.click(screen.getByTestId("folder-browser-use"));
-
-    await waitFor(() =>
-      expect(
-        screen.queryByTestId("folder-browser-modal"),
-      ).not.toBeInTheDocument(),
-    );
-
-    // The same /Users/me/dev folder should be deduped, not duplicated, and
-    // its children should NOT have been imported as workspaces.
-    expect(
-      useWorkspacesStore
-        .getState()
-        .workspaces.map((w) => w.path)
-        .sort(),
-    ).toEqual(["/Users/me/dev"]);
-
-    // Second pass: pick a child folder; it should be added as a single
-    // workspace (still no recursion into its subfolders).
-    await user.click(screen.getByTestId("workspace-dropdown"));
-    await user.click(await screen.findByTestId("add-workspaces-button"));
-    await screen.findByTestId("folder-browser-modal");
-    await user.click(await screen.findByTestId("folder-browser-entry-dev"));
-    await user.click(await screen.findByTestId("folder-browser-entry-repo1"));
-    await user.click(screen.getByTestId("folder-browser-use"));
-
-    await waitFor(() =>
-      expect(
-        screen.queryByTestId("folder-browser-modal"),
-      ).not.toBeInTheDocument(),
-    );
-
-    expect(
-      useWorkspacesStore
-        .getState()
-        .workspaces.map((w) => w.path)
-        .sort(),
-    ).toEqual(["/Users/me/dev", "/Users/me/dev/repo1"]);
-    expect(searchSpy).toHaveBeenCalledWith("/Users/me/dev");
+      window.sessionStorage.getItem(HOME_SELECTED_WORKSPACE_PATH_KEY),
+    ).toBeNull();
   });
 
-  it("Manage Workspaces lets you remove individual workspaces and clears the current selection", async () => {
-    const workspaces: LocalWorkspace[] = [
-      { id: "/Users/me/dev/repo1", name: "repo1", path: "/Users/me/dev/repo1" },
-      { id: "/Users/me/dev/repo2", name: "repo2", path: "/Users/me/dev/repo2" },
-    ];
-    renderForm(workspaces);
-    const user = userEvent.setup();
-    const launchButton = screen.getByTestId("workspace-launch-button");
-
-    await user.click(screen.getByTestId("workspace-dropdown"));
-    const dropdownMenu = await screen.findByTestId("workspace-dropdown-menu");
-    await user.click(within(dropdownMenu).getByText("repo1"));
-    expect(launchButton).toBeEnabled();
-
-    await user.click(screen.getByTestId("workspace-dropdown"));
-    await user.click(await screen.findByTestId("manage-workspaces-button"));
-
-    await screen.findByTestId("manage-workspaces-modal");
-    await user.click(screen.getByTestId("manage-workspaces-remove-repo1"));
-
-    expect(useWorkspacesStore.getState().workspaces.map((w) => w.path)).toEqual(
-      ["/Users/me/dev/repo1", "/Users/me/dev/repo2"],
-    );
-
-    await screen.findByTestId("confirmation-modal");
-    await user.click(screen.getByTestId("confirm-button"));
-
-    expect(useWorkspacesStore.getState().workspaces.map((w) => w.path)).toEqual(
-      ["/Users/me/dev/repo2"],
-    );
-    expect(launchButton).toBeDisabled();
-
-    await user.click(screen.getByTestId("manage-workspaces-done"));
-    await waitFor(() =>
-      expect(
-        screen.queryByTestId("manage-workspaces-modal"),
-      ).not.toBeInTheDocument(),
-    );
-  });
-
-  it("Manage Workspaces button is hidden when there are no workspaces", async () => {
-    renderForm([]);
-    const user = userEvent.setup();
-
-    await user.click(screen.getByTestId("workspace-dropdown"));
-    await screen.findByTestId("add-workspaces-button");
-    expect(
-      screen.queryByTestId("manage-workspaces-button"),
-    ).not.toBeInTheDocument();
-  });
-
-  it("Implicit /projects parent surfaces workspaces automatically", async () => {
-    const searchSpy = mockSearchSubdirectories;
-
-    mockSearchSubdirectories.mockImplementation(async (path: string) => {
-      if (path === "/projects") {
-        return {
-          items: [
-            { name: "demo-app", path: "/projects/demo-app" },
-            { name: "sample-tools", path: "/projects/sample-tools" },
-          ],
-          next_page_id: null,
-        };
-      }
-      return { items: [], next_page_id: null };
+  it("renders workspaces returned by the agent-server in the dropdown", async () => {
+    // Arrange
+    renderForm({
+      workspaces: [
+        {
+          id: "/Users/me/dev/repo1",
+          name: "repo1",
+          path: "/Users/me/dev/repo1",
+        },
+      ],
     });
-
-    renderForm();
     const user = userEvent.setup();
 
-    await user.click(screen.getByTestId("workspace-dropdown"));
-    const dropdownMenu = await screen.findByTestId("workspace-dropdown-menu");
-    await within(dropdownMenu).findByText("demo-app");
-    await within(dropdownMenu).findByText("sample-tools");
+    // Act
+    const menu = await openWorkspaceDropdown(user);
 
-    expect(searchSpy).toHaveBeenCalledWith("/projects");
+    // Assert
+    expect(await within(menu).findByText("repo1")).toBeInTheDocument();
   });
 
-  it("Add Workspace starts at the docker /projects mount and can save nested folders", async () => {
-    mockGetHome.mockResolvedValue({
-      home: "/home/openhands",
-      favorites: [{ label: "Downloads", path: "/home/openhands/Downloads" }],
-      locations: [],
-    });
-    mockSearchSubdirectories.mockImplementation(async (path: string) => {
-      if (path === "/projects") {
-        return {
-          items: [{ name: "demo-app", path: "/projects/demo-app" }],
-          next_page_id: null,
-        };
-      }
-      if (path === "/projects/demo-app") {
-        return {
-          items: [
-            {
-              name: "web-client",
-              path: "/projects/demo-app/web-client",
-            },
-          ],
-          next_page_id: null,
-        };
-      }
-      if (path === "/projects/demo-app/web-client") {
-        return { items: [], next_page_id: null };
-      }
-      return { items: [], next_page_id: null };
-    });
-
-    renderForm();
-    const user = userEvent.setup();
-
-    await user.click(screen.getByTestId("workspace-dropdown"));
-    await user.click(await screen.findByTestId("add-workspaces-button"));
-
-    await screen.findByTestId("folder-browser-modal");
-    expect(
-      await screen.findByTestId("folder-browser-current-path"),
-    ).toHaveTextContent("/projects");
-    expect(
-      await screen.findByTestId("folder-browser-sidebar-/projects"),
-    ).toBeInTheDocument();
-    await user.click(
-      await screen.findByTestId("folder-browser-entry-demo-app"),
-    );
-    await user.click(
-      await screen.findByTestId("folder-browser-entry-web-client"),
-    );
-    await user.click(screen.getByTestId("folder-browser-use"));
-
-    await waitFor(() =>
-      expect(
-        screen.queryByTestId("folder-browser-modal"),
-      ).not.toBeInTheDocument(),
-    );
-    expect(useWorkspacesStore.getState().workspaces.map((w) => w.path)).toEqual(
-      ["/projects/demo-app/web-client"],
-    );
-  });
-
-  it("A stored /projects parent suppresses the implicit duplicate query", async () => {
-    const searchSpy = mockSearchSubdirectories.mockResolvedValue({
-      items: [],
-      next_page_id: null,
-    });
-
-    renderForm(
-      [],
-      [{ id: "custom-projects", name: "My Projects", path: "/projects" }],
-    );
-
-    await waitFor(() => expect(searchSpy).toHaveBeenCalledTimes(1));
-    expect(searchSpy).toHaveBeenCalledWith("/projects");
-  });
-
-  it("Launch creates a v1 conversation with the selected workspace path as working_dir", async () => {
-    const workspaces: LocalWorkspace[] = [
-      { id: "/Users/me/dev/repo1", name: "repo1", path: "/Users/me/dev/repo1" },
-      { id: "/Users/me/dev/repo2", name: "repo2", path: "/Users/me/dev/repo2" },
-    ];
-    const createSpy = vi
-      .spyOn(AgentServerConversationService, "createConversation")
-      .mockResolvedValue(makeStartTask({ app_conversation_id: "conv-xyz" }));
-
-    renderForm(workspaces);
-    const user = userEvent.setup();
-
-    await user.click(screen.getByTestId("workspace-dropdown"));
-    const items = await screen.findAllByText(/repo[12]/);
-    await user.click(items.find((el) => el.textContent === "repo2")!);
-    await user.click(screen.getByTestId("workspace-launch-button"));
-
-    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(1));
-    expect(createSpy).toHaveBeenCalledWith(
-      undefined,
-      undefined,
-      undefined,
-      null,
-      "/Users/me/dev/repo2",
-      undefined,
-      undefined,
-    );
-    await waitFor(() =>
-      expect(mockNavigate).toHaveBeenCalledWith("/conversations/conv-xyz"),
-    );
-  });
-
-  it("Launch button is disabled until a workspace is selected", async () => {
-    renderForm([
-      { id: "/Users/me/dev/repo1", name: "repo1", path: "/Users/me/dev/repo1" },
-    ]);
-
-    const launchButton = screen.getByTestId("workspace-launch-button");
-    expect(launchButton).toBeDisabled();
-
-    const user = userEvent.setup();
-    await user.click(screen.getByTestId("workspace-dropdown"));
-    await user.click(await screen.findByText("repo1"));
-
-    expect(launchButton).toBeEnabled();
-  });
-
-  it("disables the workspace dropdown while parent workspaces are loading", async () => {
-    mockSearchSubdirectories.mockReturnValue(new Promise(() => {}) as never);
-
-    renderForm(
-      [],
-      [{ id: "/Users/me/dev", name: "dev", path: "/Users/me/dev" }],
-    );
-
-    await waitFor(() => {
-      expect(screen.getByTestId("workspace-dropdown")).toBeDisabled();
-    });
-    expect(screen.getByTestId("workspace-status-message")).toBeInTheDocument();
-  });
-
-  it("Add all subdirectories saves a workspace parent and lists its children dynamically", async () => {
-    mockGetHome.mockResolvedValue({ home: "/Users/me" });
-    const searchSpy = mockSearchSubdirectories;
-
-    mockSearchSubdirectories.mockImplementation(async (path: string) => {
-      if (path === "/Users/me") {
-        return {
-          items: [{ name: "dev", path: "/Users/me/dev" }],
-          next_page_id: null,
-        };
-      }
-      if (path === "/Users/me/dev") {
-        return {
-          items: [
-            { name: "repo1", path: "/Users/me/dev/repo1" },
-            { name: "repo2", path: "/Users/me/dev/repo2" },
-          ],
-          next_page_id: null,
-        };
-      }
-      throw new Error(`unexpected path ${path}`);
-    });
-
-    renderForm();
-    const user = userEvent.setup();
-
-    await user.click(screen.getByTestId("workspace-dropdown"));
-    await user.click(await screen.findByTestId("add-workspaces-button"));
-
-    await screen.findByTestId("folder-browser-modal");
-    await user.click(await screen.findByTestId("folder-browser-entry-dev"));
-    await screen.findByTestId("folder-browser-entry-repo1");
-
-    // Click the "Add all subdirectories" button.
-    await user.click(screen.getByTestId("folder-browser-add-all-subdirs"));
-
-    await waitFor(() =>
-      expect(
-        screen.queryByTestId("folder-browser-modal"),
-      ).not.toBeInTheDocument(),
-    );
-
-    // The directory itself becomes a workspace parent, not a workspace.
-    expect(useWorkspacesStore.getState().workspaces).toEqual([]);
-    expect(
-      useWorkspacesStore.getState().workspaceParents.map((p) => p.path),
-    ).toEqual(["/Users/me/dev"]);
-
-    // ...and its subdirectories surface as workspaces dynamically.
-    await user.click(screen.getByTestId("workspace-dropdown"));
-    const dynamicDropdown = await screen.findByTestId(
-      "workspace-dropdown-menu",
-    );
-    await within(dynamicDropdown).findByText("repo1");
-    await within(dynamicDropdown).findByText("repo2");
-
-    expect(searchSpy).toHaveBeenCalledWith("/Users/me/dev");
-  });
-
-  it("Removing a workspace parent stops listing its children", async () => {
-    // Scope the mock to the user-added parent so the implicit `/projects`
-    // parent (always queried by `useResolvedWorkspaces`) doesn't also get
-    // these entries.
-    const searchSpy = mockSearchSubdirectories;
-
-    mockSearchSubdirectories.mockImplementation(async (path: string) => {
-      if (path === "/Users/me/dev") {
-        return {
-          items: [
-            { name: "repoA", path: "/Users/me/dev/repoA" },
-            { name: "repoB", path: "/Users/me/dev/repoB" },
-          ],
-          next_page_id: null,
-        };
-      }
-      return { items: [], next_page_id: null };
-    });
-
-    renderForm(
-      [],
-      [{ id: "/Users/me/dev", name: "dev", path: "/Users/me/dev" }],
-    );
-
-    const user = userEvent.setup();
-
-    // Children should appear in the dropdown.
-    await user.click(screen.getByTestId("workspace-dropdown"));
-    const dropdownMenu = await screen.findByTestId("workspace-dropdown-menu");
-    await within(dropdownMenu).findByText("repoA");
-    await within(dropdownMenu).findByText("repoB");
-
-    // Manage modal should expose a remove button for the parent.
-    await user.click(screen.getByTestId("manage-workspaces-button"));
-    await screen.findByTestId("manage-workspaces-modal");
-    expect(
-      screen.getByTestId("manage-workspaces-parent-row-dev"),
-    ).toBeInTheDocument();
-
-    await user.click(screen.getByTestId("manage-workspaces-remove-parent-dev"));
-
-    expect(useWorkspacesStore.getState().workspaceParents).toEqual([
-      { id: "/Users/me/dev", name: "dev", path: "/Users/me/dev" },
-    ]);
-
-    await screen.findByTestId("confirmation-modal");
-    await user.click(screen.getByTestId("confirm-button"));
-
-    expect(useWorkspacesStore.getState().workspaceParents).toEqual([]);
-    expect(searchSpy).toHaveBeenCalledWith("/Users/me/dev");
-
-    await user.click(screen.getByTestId("manage-workspaces-done"));
-    await waitFor(() =>
-      expect(
-        screen.queryByTestId("manage-workspaces-modal"),
-      ).not.toBeInTheDocument(),
-    );
-
-    await user.click(screen.getByTestId("workspace-dropdown"));
-    const refreshedDropdown = await screen.findByTestId(
-      "workspace-dropdown-menu",
-    );
-    expect(
-      within(refreshedDropdown).queryByText("repoA"),
-    ).not.toBeInTheDocument();
-    expect(
-      within(refreshedDropdown).queryByText("repoB"),
-    ).not.toBeInTheDocument();
-  });
-
-  it("invokes onConfirm with the selected workspace instead of creating a conversation when used in dialog mode", async () => {
-    const onConfirm = vi.fn();
-    const createSpy = vi.spyOn(
-      AgentServerConversationService,
-      "createConversation",
-    );
-
-    renderForm(
-      [{ id: "/Users/me/dev/repo1", name: "repo1", path: "/Users/me/dev/repo1" }],
-      [],
-      { onConfirm },
-    );
-    const user = userEvent.setup();
-
-    await user.click(screen.getByTestId("workspace-dropdown"));
-    await user.click(await screen.findByText("repo1"));
-    await user.click(screen.getByTestId("workspace-launch-button"));
-
-    expect(onConfirm).toHaveBeenCalledTimes(1);
-    expect(onConfirm).toHaveBeenCalledWith({
+  it("restores the selected workspace after unmounting and remounting", async () => {
+    const workspace = {
       id: "/Users/me/dev/repo1",
       name: "repo1",
       path: "/Users/me/dev/repo1",
-    });
-    expect(createSpy).not.toHaveBeenCalled();
-    expect(mockNavigate).not.toHaveBeenCalled();
+    };
+    const user = userEvent.setup();
+
+    const { unmount } = renderForm({ workspaces: [workspace] });
+    const firstMenu = await openWorkspaceDropdown(user);
+    await user.click(await within(firstMenu).findByText("repo1"));
+
+    await waitFor(() =>
+      expect(
+        window.sessionStorage.getItem(HOME_SELECTED_WORKSPACE_PATH_KEY),
+      ).toBe(workspace.path),
+    );
+    expect(screen.getByTestId("workspace-launch-button")).not.toBeDisabled();
+
+    unmount();
+    renderForm({ workspaces: [workspace] });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("workspace-dropdown")).toHaveValue("repo1"),
+    );
+    expect(screen.getByTestId("workspace-launch-button")).not.toBeDisabled();
   });
 
-  it("Add Workspace sidebar renders backend-provided favorites dynamically and navigates into them on click", async () => {
-    // Arrange: backend reports a home with a custom favorite that did NOT
-    // exist in the old hardcoded list (Documents / Desktop / Downloads).
-    // This is the regression guard for the original 404-on-navigate bug.
-    mockGetHome.mockResolvedValue({
-      home: "/Users/me",
-      favorites: [{ label: "projects", path: "/Users/me/projects" }],
-      locations: [{ label: "/", path: "/" }],
+  it("clears a persisted workspace path that is no longer resolved", async () => {
+    window.sessionStorage.setItem(
+      HOME_SELECTED_WORKSPACE_PATH_KEY,
+      "/Users/me/dev/missing",
+    );
+
+    renderForm({
+      workspaces: [
+        {
+          id: "/Users/me/dev/repo1",
+          name: "repo1",
+          path: "/Users/me/dev/repo1",
+        },
+      ],
     });
-    const searchSpy = mockSearchSubdirectories;
+
+    await waitFor(() =>
+      expect(
+        window.sessionStorage.getItem(HOME_SELECTED_WORKSPACE_PATH_KEY),
+      ).toBeNull(),
+    );
+    expect(screen.getByTestId("workspace-dropdown")).toHaveValue("");
+    expect(screen.getByTestId("workspace-launch-button")).toBeDisabled();
+  });
+
+  it("shows a version-specific workspace message for old agent servers", async () => {
+    vi.spyOn(WorkspacesService, "listWorkspaces").mockRejectedValue({
+      code: "AGENT_SERVER_VERSION_TOO_OLD",
+      feature: "workspaces",
+      requiredVersion: "1.23.0",
+      actualVersion: "1.22.1",
+    });
+
+    render(<WorkspaceSelectionForm />, {
+      wrapper: ({ children }) => (
+        <QueryClientProvider
+          client={
+            new QueryClient({
+              defaultOptions: {
+                queries: { retry: false },
+                mutations: { retry: false },
+              },
+            })
+          }
+        >
+          {children}
+        </QueryClientProvider>
+      ),
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("workspace-dropdown")).toBeDisabled(),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("workspace-dropdown")).toHaveAttribute(
+        "placeholder",
+        "HOME$WORKSPACES_UNSUPPORTED_PLACEHOLDER",
+      ),
+    );
+    expect(screen.getByTestId("workspace-status-message")).toHaveTextContent(
+      "HOME$WORKSPACES_UNSUPPORTED_AGENT_SERVER",
+    );
+  });
+
+  it("Add Workspace dispatches addWorkspaces to the agent-server", async () => {
+    // Arrange
+    const addSpy = vi
+      .spyOn(WorkspacesService, "addWorkspaces")
+      .mockResolvedValue({ workspaces: [], workspaceParents: [] });
     mockSearchSubdirectories.mockImplementation(async (path: string) => {
-      if (path === "/Users/me/projects") {
+      if (path === "/Users/me") {
         return {
-          items: [{ name: "repo1", path: "/Users/me/projects/repo1" }],
+          items: [{ name: "dev", path: "/Users/me/dev" }],
           next_page_id: null,
         };
       }
       return { items: [], next_page_id: null };
     });
-
     renderForm();
     const user = userEvent.setup();
 
-    // Act: open the modal and click the dynamic favorite.
-    await user.click(screen.getByTestId("workspace-dropdown"));
+    // Act
+    await user.click(await screen.findByTestId("workspace-dropdown"));
     await user.click(await screen.findByTestId("add-workspaces-button"));
     await screen.findByTestId("folder-browser-modal");
-    await user.click(
-      await screen.findByTestId("folder-browser-sidebar-projects"),
+    await user.click(await screen.findByTestId("folder-browser-entry-dev"));
+    await user.click(screen.getByTestId("folder-browser-use"));
+
+    // Assert
+    await waitFor(() => expect(addSpy).toHaveBeenCalledTimes(1));
+    expect(addSpy).toHaveBeenCalledWith([
+      { id: "/Users/me/dev", name: "dev", path: "/Users/me/dev" },
+    ]);
+  });
+
+  it("handles Windows paths when browsing and adding a workspace", async () => {
+    const homePath = String.raw`C:\Users\me`;
+    const devPath = String.raw`C:\Users\me\dev`;
+    const addSpy = vi
+      .spyOn(WorkspacesService, "addWorkspaces")
+      .mockResolvedValue({ workspaces: [], workspaceParents: [] });
+    mockGetHome.mockResolvedValue({ home: homePath });
+    mockSearchSubdirectories.mockImplementation(async (dir: string) => {
+      if (dir === homePath) {
+        return {
+          items: [{ name: "dev", path: devPath }],
+          next_page_id: null,
+        };
+      }
+      return { items: [], next_page_id: null };
+    });
+    renderForm();
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByTestId("workspace-dropdown"));
+    await user.click(await screen.findByTestId("add-workspaces-button"));
+    await screen.findByTestId("folder-browser-modal");
+    await expect(
+      screen.getByTestId("folder-browser-current-path"),
+    ).toHaveTextContent(homePath);
+
+    await user.click(await screen.findByTestId("folder-browser-entry-dev"));
+    await expect(
+      screen.getByTestId("folder-browser-current-path"),
+    ).toHaveTextContent(devPath);
+
+    await user.click(screen.getByTestId("folder-browser-up"));
+    await expect(
+      screen.getByTestId("folder-browser-current-path"),
+    ).toHaveTextContent(homePath);
+
+    await user.click(await screen.findByTestId("folder-browser-entry-dev"));
+    await user.click(screen.getByTestId("folder-browser-use"));
+
+    await waitFor(() => expect(addSpy).toHaveBeenCalledTimes(1));
+    expect(addSpy).toHaveBeenCalledWith([
+      { id: devPath, name: "dev", path: devPath },
+    ]);
+  });
+
+  it("auto-selects the newly added workspace after Add Workspace", async () => {
+    // Arrange: start with another workspace already selected, mirroring the
+    // repro in OpenHands/agent-canvas#1212.
+    const existingWorkspace = {
+      id: "/Users/me/dev/repo1",
+      name: "repo1",
+      path: "/Users/me/dev/repo1",
+    };
+    const addedWorkspace = {
+      id: "/Users/me/dev",
+      name: "dev",
+      path: "/Users/me/dev",
+    };
+    const addSpy = vi
+      .spyOn(WorkspacesService, "addWorkspaces")
+      .mockImplementation(async (items) => {
+        // Mimic the server: once added, the list endpoint includes the new
+        // workspace so the post-add refetch resolves it.
+        const workspaces = [existingWorkspace, ...items];
+        vi.spyOn(WorkspacesService, "listWorkspaces").mockResolvedValue({
+          workspaces,
+          workspaceParents: [],
+        });
+        return { workspaces, workspaceParents: [] };
+      });
+    mockSearchSubdirectories.mockImplementation(async (path: string) => {
+      if (path === "/Users/me") {
+        return {
+          items: [{ name: "dev", path: "/Users/me/dev" }],
+          next_page_id: null,
+        };
+      }
+      return { items: [], next_page_id: null };
+    });
+    renderForm({ workspaces: [existingWorkspace] });
+    const user = userEvent.setup();
+
+    const selectionMenu = await openWorkspaceDropdown(user);
+    await user.click(await within(selectionMenu).findByText("repo1"));
+    await waitFor(() =>
+      expect(
+        window.sessionStorage.getItem(HOME_SELECTED_WORKSPACE_PATH_KEY),
+      ).toBe(existingWorkspace.path),
     );
 
-    // Assert: the dynamic favorite drove the navigation, and the previously
-    // hardcoded names are no longer present in the sidebar.
-    await screen.findByTestId("folder-browser-entry-repo1");
-    expect(searchSpy).toHaveBeenCalledWith("/Users/me/projects");
+    // Act
+    await openWorkspaceDropdown(user);
+    await user.click(await screen.findByTestId("add-workspaces-button"));
+    await screen.findByTestId("folder-browser-modal");
+    await user.click(await screen.findByTestId("folder-browser-entry-dev"));
+    await user.click(screen.getByTestId("folder-browser-use"));
+
+    // Assert
+    await waitFor(() => expect(addSpy).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByTestId("workspace-dropdown")).toHaveValue(
+        addedWorkspace.name,
+      ),
+    );
     expect(
-      screen.queryByTestId("folder-browser-sidebar-documents"),
-    ).not.toBeInTheDocument();
+      window.sessionStorage.getItem(HOME_SELECTED_WORKSPACE_PATH_KEY),
+    ).toBe(addedWorkspace.path);
+    expect(screen.getByTestId("workspace-launch-button")).not.toBeDisabled();
+  });
+
+  it("Remove Workspace dispatches removeWorkspace and clears the selected workspace", async () => {
+    // Arrange
+    const removeSpy = vi
+      .spyOn(WorkspacesService, "removeWorkspace")
+      .mockResolvedValue();
+    const workspace = {
+      id: "/Users/me/dev/repo1",
+      name: "repo1",
+      path: "/Users/me/dev/repo1",
+    };
+    renderForm({
+      workspaces: [workspace],
+    });
+    const user = userEvent.setup();
+
+    // Act
+    const selectionMenu = await openWorkspaceDropdown(user);
+    await user.click(await within(selectionMenu).findByText("repo1"));
+    await waitFor(() =>
+      expect(
+        window.sessionStorage.getItem(HOME_SELECTED_WORKSPACE_PATH_KEY),
+      ).toBe(workspace.path),
+    );
+
+    await openWorkspaceDropdown(user);
+    await user.click(await screen.findByTestId("manage-workspaces-button"));
+    await screen.findByTestId("manage-workspaces-modal");
+    await user.click(screen.getByTestId("manage-workspaces-remove-repo1"));
+    await screen.findByTestId("confirmation-modal");
+    await user.click(screen.getByTestId("confirm-button"));
+
+    // Assert
+    await waitFor(() => expect(removeSpy).toHaveBeenCalledTimes(1));
+    expect(removeSpy).toHaveBeenCalledWith("/Users/me/dev/repo1");
+    expect(
+      window.sessionStorage.getItem(HOME_SELECTED_WORKSPACE_PATH_KEY),
+    ).toBeNull();
+    expect(screen.getByTestId("workspace-dropdown")).toHaveValue("");
+    expect(screen.getByTestId("workspace-launch-button")).toBeDisabled();
+  });
+
+  it("clears the selected parent-derived workspace when its parent is removed", async () => {
+    const removeParentSpy = vi
+      .spyOn(WorkspacesService, "removeWorkspaceParent")
+      .mockResolvedValue();
+    const workspaceParent = {
+      id: "/Users/me/dev",
+      name: "dev",
+      path: "/Users/me/dev",
+    };
+    const workspacePath = "/Users/me/dev/repo1";
+    mockSearchSubdirectories.mockImplementation(async (path: string) => {
+      if (path === workspaceParent.path) {
+        return {
+          items: [{ name: "repo1", path: workspacePath }],
+          next_page_id: null,
+        };
+      }
+      return { items: [], next_page_id: null };
+    });
+    renderForm({ workspaceParents: [workspaceParent] });
+    const user = userEvent.setup();
+
+    const selectionMenu = await openWorkspaceDropdown(user);
+    await user.click(await within(selectionMenu).findByText("repo1"));
+    await waitFor(() =>
+      expect(
+        window.sessionStorage.getItem(HOME_SELECTED_WORKSPACE_PATH_KEY),
+      ).toBe(workspacePath),
+    );
+
+    await openWorkspaceDropdown(user);
+    await user.click(await screen.findByTestId("manage-workspaces-button"));
+    await screen.findByTestId("manage-workspaces-modal");
+    await user.click(screen.getByTestId("manage-workspaces-remove-parent-dev"));
+    await screen.findByTestId("confirmation-modal");
+    await user.click(screen.getByTestId("confirm-button"));
+
+    await waitFor(() => expect(removeParentSpy).toHaveBeenCalledTimes(1));
+    expect(removeParentSpy).toHaveBeenCalledWith(workspaceParent.path);
+    expect(
+      window.sessionStorage.getItem(HOME_SELECTED_WORKSPACE_PATH_KEY),
+    ).toBeNull();
+    expect(screen.getByTestId("workspace-dropdown")).toHaveValue("");
+    expect(screen.getByTestId("workspace-launch-button")).toBeDisabled();
+  });
+
+  it("Add all subdirectories dispatches addWorkspaceParents to the agent-server", async () => {
+    // Arrange
+    const addParentsSpy = vi
+      .spyOn(WorkspacesService, "addWorkspaceParents")
+      .mockResolvedValue({ workspaces: [], workspaceParents: [] });
+    mockSearchSubdirectories.mockImplementation(async (path: string) => {
+      if (path === "/Users/me") {
+        return {
+          items: [{ name: "dev", path: "/Users/me/dev" }],
+          next_page_id: null,
+        };
+      }
+      return { items: [], next_page_id: null };
+    });
+    renderForm();
+    const user = userEvent.setup();
+
+    // Act
+    await user.click(await screen.findByTestId("workspace-dropdown"));
+    await user.click(await screen.findByTestId("add-workspaces-button"));
+    await screen.findByTestId("folder-browser-modal");
+    await user.click(await screen.findByTestId("folder-browser-entry-dev"));
+    await user.click(screen.getByTestId("folder-browser-add-all-subdirs"));
+
+    // Assert
+    await waitFor(() => expect(addParentsSpy).toHaveBeenCalledTimes(1));
+    expect(addParentsSpy).toHaveBeenCalledWith([
+      { id: "/Users/me/dev", name: "dev", path: "/Users/me/dev" },
+    ]);
   });
 });

@@ -1,10 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  getStatusCode,
-  getIndicatorColor,
-  IndicatorColor,
-} from "#/utils/status";
-import { AgentState } from "#/types/agent-state";
+import { getStatusCode, getTaskStatusI18nKey } from "#/utils/status";
 import { I18nKey } from "#/i18n/declaration";
 import { ExecutionStatus } from "#/types/agent-server/core";
 import type { AppConversationStartTaskStatus } from "#/api/conversation-service/agent-server-conversation-service.types";
@@ -53,54 +48,23 @@ describe("getStatusCode", () => {
   });
 });
 
-describe("getIndicatorColor", () => {
-  it("prioritises agent readiness over stale runtime status for AWAITING_USER_INPUT", () => {
-    const result = getIndicatorColor(
-      "OPEN",
-      "RUNNING",
-      "STATUS$STARTING_RUNTIME",
-      AgentState.AWAITING_USER_INPUT,
-    );
-    expect(result).toBe(IndicatorColor.BLUE);
-  });
-
-  it("returns red when websocket is closed", () => {
-    const result = getIndicatorColor(
-      "CLOSED",
-      "STOPPED",
-      "STATUS$STOPPED",
-      AgentState.RUNNING,
-    );
-    expect(result).toBe(IndicatorColor.RED);
-  });
-
-  it("returns yellow when agent is loading", () => {
-    const result = getIndicatorColor(
-      "OPEN",
-      "STARTING",
-      "STATUS$STARTING_RUNTIME",
-      AgentState.LOADING,
-    );
-    expect(result).toBe(IndicatorColor.YELLOW);
-  });
-
-  it("returns orange for AWAITING_USER_CONFIRMATION", () => {
-    const result = getIndicatorColor(
-      "OPEN",
-      "RUNNING",
-      "STATUS$STARTING_RUNTIME",
-      AgentState.AWAITING_USER_CONFIRMATION,
-    );
-    expect(result).toBe(IndicatorColor.ORANGE);
-  });
-
-  it("returns green for FINISHED state", () => {
-    const result = getIndicatorColor(
-      "OPEN",
-      "RUNNING",
-      "STATUS$SETTING_UP_WORKSPACE",
-      AgentState.FINISHED,
-    );
-    expect(result).toBe(IndicatorColor.GREEN);
+describe("getTaskStatusI18nKey", () => {
+  // Exhaustive coverage of the shared mapper over every AppConversationStartTaskStatus
+  // member: the dedicated keys (WAITING_FOR_SANDBOX + the two setup keys), the
+  // terminal READY/ERROR states (which now resolve to their own localized keys
+  // instead of silently falling back to STARTING_CONVERSATION), and the group
+  // that collapses to the generic "Starting" label (WORKING/PREPARING_REPOSITORY/
+  // RUNNING_SETUP_SCRIPT). `as const` keeps the inputs typed as the union.
+  it.each([
+    ["WAITING_FOR_SANDBOX", I18nKey.COMMON$WAITING_FOR_SANDBOX],
+    ["SETTING_UP_GIT_HOOKS", I18nKey.STATUS$SETTING_UP_GIT_HOOKS],
+    ["SETTING_UP_SKILLS", I18nKey.STATUS$SETTING_UP_SKILLS],
+    ["READY", I18nKey.CONVERSATION$READY],
+    ["ERROR", I18nKey.COMMON$ERROR],
+    ["WORKING", I18nKey.CONVERSATION$STARTING_CONVERSATION],
+    ["PREPARING_REPOSITORY", I18nKey.CONVERSATION$STARTING_CONVERSATION],
+    ["RUNNING_SETUP_SCRIPT", I18nKey.CONVERSATION$STARTING_CONVERSATION],
+  ] as const)("maps %s to its i18n key", (taskStatus, expectedKey) => {
+    expect(getTaskStatusI18nKey(taskStatus)).toBe(expectedKey);
   });
 });

@@ -1,6 +1,8 @@
 import React from "react";
-import { usePostHog } from "posthog-js/react";
+import { useNavigate } from "react-router";
+import { useTracking } from "#/hooks/use-tracking";
 import { useTranslation } from "react-i18next";
+import { isAcpAuthErrorCode } from "#/utils/acp-error-codes";
 import { convertImageToBase64 } from "#/utils/convert-image-to-base-64";
 import { createChatMessage } from "#/services/chat-service";
 import { BtwMessages } from "./btw-messages";
@@ -17,6 +19,7 @@ import { ScrollProvider } from "#/context/scroll-context";
 import { useInitialQueryStore } from "#/stores/initial-query-store";
 import { useSendMessage } from "#/hooks/use-send-message";
 import { useAgentState } from "#/hooks/use-agent-state";
+import { useIsArchivedConversation } from "#/hooks/use-is-archived-conversation";
 import { useHandleBuildPlanClick } from "#/hooks/use-handle-build-plan-click";
 
 import { ScrollToBottomButton } from "#/components/shared/buttons/scroll-to-bottom-button";
@@ -25,7 +28,10 @@ import { ChatMessagesSkeleton } from "./chat-messages-skeleton";
 import { displayErrorToast } from "#/utils/custom-toast-handlers";
 import { useErrorMessageStore } from "#/stores/error-message-store";
 import { useOptimisticUserMessageStore } from "#/stores/optimistic-user-message-store";
+import { SERVER_CONNECTION_ERROR_MESSAGE } from "#/constants/server-connection-error";
 import { ErrorMessageBanner } from "./error-message-banner";
+import { LlmNotConfiguredBanner } from "#/components/features/home/llm-not-configured-banner";
+import { useLlmConfigured } from "#/hooks/use-llm-configured";
 import { Messages } from "#/components/conversation-events/chat/messages";
 import { PendingUserMessages } from "./pending-user-messages";
 import { useUnifiedUploadFiles } from "#/hooks/mutation/use-unified-upload-files";
@@ -33,11 +39,13 @@ import { validateFiles } from "#/utils/file-validation";
 import { useConversationStore } from "#/stores/conversation-store";
 import ConfirmationModeEnabled from "./confirmation-mode-enabled";
 import { useTaskPolling } from "#/hooks/query/use-task-polling";
+import { matchesPendingConversationId } from "#/utils/pending-task-message-link";
 import { useConversationWebSocket } from "#/contexts/conversation-websocket-context";
 import ChatStatusIndicator from "./chat-status-indicator";
 import { getStatusColor, getStatusText } from "#/utils/utils";
 import { useNewConversationCommand } from "#/hooks/mutation/use-new-conversation-command";
 import { useOptionalConversationId } from "#/hooks/use-conversation-id";
+import { useActiveConversation } from "#/hooks/query/use-active-conversation";
 import { I18nKey } from "#/i18n/declaration";
 
 function getEntryPoint(
@@ -50,11 +58,15 @@ function getEntryPoint(
 }
 
 export function ChatInterface() {
-  const posthog = usePostHog();
+  const { trackInitialQuerySubmitted, trackUserMessageSent } = useTracking();
   const { setMessageToSend } = useConversationStore();
-  const { errorMessage, removeErrorMessage, setErrorMessage } =
+  const { errorMessage, errorCode, removeErrorMessage, setErrorMessage } =
     useErrorMessageStore();
+  const navigate = useNavigate();
   const { isTask, taskStatus, taskDetail } = useTaskPolling();
+  // Hide empty-state chrome for the entire `/conversations/task-{uuid}` route,
+  // including the brief READY window before redirect completes.
+  const isProvisioningTask = isTask;
   const conversationWebSocket = useConversationWebSocket();
   const { send } = useSendMessage();
   const {
@@ -90,6 +102,20 @@ export function ChatInterface() {
 
   const { curAgentState } = useAgentState();
   const { handleBuildPlanClick } = useHandleBuildPlanClick();
+
+  // Cloud conversations whose sandbox is MISSING or ERROR are read-only:
+  // the sandbox is gone and cannot be resumed, so we hide the chat input
+  // and show an explanatory banner. For local backends sandbox_status is
+  // always null, so this is effectively a no-op for non-cloud use.
+  const { data: activeConversation } = useActiveConversation();
+  const sandboxStatus = activeConversation?.sandbox_status ?? null;
+  const isArchivedConversation = useIsArchivedConversation();
+
+  // Block sending in a resumed conversation that has no usable LLM, and show
+  // the same setup banner as the home screen so the dead end is explained.
+  const { isConfigured: isLlmConfigured, isLoading: isLlmConfigLoading } =
+    useLlmConfigured();
+  const llmBlocked = !isLlmConfigLoading && !isLlmConfigured;
 
   // Disable Build button while agent is running (streaming)
   const isAgentRunning =
@@ -154,7 +180,9 @@ export function ChatInterface() {
   } | null>(null);
   const maybeLoadOlder = React.useCallback(
     (target: HTMLElement) => {
-      if (isLoadingOlderEvents || !hasMoreOlderEvents) return;
+      if (isProvisioningTask || isLoadingOlderEvents || !hasMoreOlderEvents) {
+        return;
+      }
 
       const atTop = target.scrollTop <= SCROLL_TOP_THRESHOLD_PX;
       const noOverflow =
@@ -174,7 +202,14 @@ export function ChatInterface() {
         setErrorMessage(message);
       });
     },
-    [hasMoreOlderEvents, isLoadingOlderEvents, loadOlder, setErrorMessage, t],
+    [
+      hasMoreOlderEvents,
+      isLoadingOlderEvents,
+      isProvisioningTask,
+      loadOlder,
+      setErrorMessage,
+      t,
+    ],
   );
 
   const handleWheelForPagination = React.useCallback(
@@ -188,14 +223,28 @@ export function ChatInterface() {
     [maybeLoadOlder],
   );
 
-  const hasPendingUserMessages = pendingMessages.length > 0;
+  const hasPendingUserMessages = React.useMemo(
+    () =>
+      conversationId
+        ? pendingMessages.some((message) =>
+            matchesPendingConversationId(
+              conversationId,
+              message.conversationId,
+            ),
+          )
+        : false,
+    [pendingMessages, conversationId],
+  );
 
   // Show V1 messages immediately if events exist in store (e.g., remount),
-  // or once loading completes. This replaces the old transition-observation
-  // pattern (useState + useEffect watching loading→loaded) which always showed
-  // skeleton on remount because local state initialized to false.
+  // if the user already has a locally-tracked pending bubble (home-page cloud
+  // submit while history/WS catch up), or once loading completes. This
+  // replaces the old transition-observation pattern (useState + useEffect
+  // watching loading→loaded) which always showed skeleton on remount because
+  // local state initialized to false.
   const showConversationMessages =
     allConversationEvents.length > 0 ||
+    hasPendingUserMessages ||
     !conversationWebSocket?.isLoadingHistory;
 
   const isReturningToConversation = !!conversationId;
@@ -241,18 +290,18 @@ export function ChatInterface() {
     const images = [...originalImages];
     const files = [...originalFiles];
     if (totalEvents === 0) {
-      posthog.capture("initial_query_submitted", {
-        entry_point: getEntryPoint(
+      trackInitialQuerySubmitted({
+        entryPoint: getEntryPoint(
           selectedRepository !== null,
           replayJson !== null,
         ),
-        query_character_length: content.length,
-        replay_json_size: replayJson?.length,
+        queryCharacterLength: content.length,
+        replayJsonSize: replayJson?.length,
       });
     } else {
-      posthog.capture("user_message_sent", {
-        session_message_count: totalEvents,
-        current_message_length: content.length,
+      trackUserMessageSent({
+        sessionMessageCount: totalEvents,
+        currentMessageLength: content.length,
       });
     }
 
@@ -277,7 +326,7 @@ export function ChatInterface() {
 
     skippedFiles.forEach((f) => displayErrorToast(f.reason));
 
-    const filePrompt = `${t("CHAT_INTERFACE$AUGMENTED_PROMPT_FILES_TITLE")}: ${uploadedFiles.join("\n\n")}`;
+    const filePrompt = `${t(I18nKey.CHAT_INTERFACE$AUGMENTED_PROMPT_FILES_TITLE)}: ${uploadedFiles.join("\n\n")}`;
     const prompt =
       uploadedFiles.length > 0 ? `${content}\n\n${filePrompt}` : content;
 
@@ -298,6 +347,10 @@ export function ChatInterface() {
       fileUrls: uploadedFiles,
       timestamp,
     });
+    // Submitting a new prompt should always pull the chat back to the
+    // latest message even if the user had scrolled up. This also re-arms
+    // autoScroll so the streamed agent reply auto-follows.
+    scrollDomToBottom();
     setMessageToSend("");
 
     try {
@@ -308,7 +361,7 @@ export function ChatInterface() {
       const sendErrorMessage =
         sendError instanceof Error
           ? sendError.message
-          : "Failed to send message";
+          : t(I18nKey.CHAT_INTERFACE$FAILED_TO_SEND_MESSAGE);
       markPendingMessageError(pendingId, sendErrorMessage);
     }
   };
@@ -398,14 +451,22 @@ export function ChatInterface() {
   return (
     <ScrollProvider value={scrollProviderValue}>
       <div
-        className="h-full flex flex-col justify-between pl-0 md:pl-4 pr-0 md:pr-4 relative"
+        className="relative flex h-full flex-col justify-between px-4"
         data-testid="chat-interface"
       >
         {!hasSubstantiveAgentActions &&
           !hasPendingUserMessages &&
           !userEventsExist &&
           !hasModelEntries &&
-          !isChatLoading && (
+          !isChatLoading &&
+          !isProvisioningTask &&
+          totalEvents === 0 &&
+          !isArchivedConversation &&
+          // With no usable LLM the suggestions can't be acted on (the input is
+          // disabled). They're also a `pointer-events-auto` overlay that would
+          // sit over the LlmNotConfiguredBanner below and swallow clicks on its
+          // setup button — so hide them and let the banner be the lone CTA.
+          !llmBlocked && (
             <ChatSuggestions
               onSuggestionsClick={(message) => setMessageToSend(message)}
             />
@@ -414,12 +475,13 @@ export function ChatInterface() {
 
         <div
           ref={scrollRef}
+          data-testid="chat-scroll-container"
           onScroll={(e) => {
             onChatBodyScroll(e.currentTarget);
             maybeLoadOlder(e.currentTarget);
           }}
           onWheel={handleWheelForPagination}
-          className="custom-scrollbar-always flex flex-col grow overflow-y-auto overflow-x-hidden px-4 pt-4 gap-2"
+          className="custom-scrollbar-always flex min-h-0 grow flex-col gap-2 overflow-x-hidden overflow-y-auto px-0 pt-4 pb-8 md:px-4"
         >
           {isChatLoading && isReturningToConversation && (
             <ChatMessagesSkeleton />
@@ -433,10 +495,11 @@ export function ChatInterface() {
 
           {isLoadingOlderEvents && (
             <div
-              className="flex justify-center py-2"
+              className="flex items-center justify-center gap-2 py-3 text-sm text-neutral-400"
               data-testid="loading-older-events"
             >
               <LoadingSpinner size="small" />
+              <span>{t(I18nKey.CHAT_INTERFACE$FETCHING_OLDER_MESSAGES)}</span>
             </div>
           )}
 
@@ -473,47 +536,80 @@ export function ChatInterface() {
           <PendingUserMessages />
         </div>
 
-        <div className="flex flex-col gap-[6px]">
+        <div className="flex shrink-0 flex-col gap-[6px] pb-4">
           <BtwMessages conversationId={conversationId} />
           {errorMessage && (
             <ErrorMessageBanner
               message={errorMessage}
+              code={errorCode}
               onDismiss={removeErrorMessage}
+              onRetry={
+                errorMessage === SERVER_CONNECTION_ERROR_MESSAGE
+                  ? () => conversationWebSocket?.reconnect()
+                  : undefined
+              }
+              onReauth={
+                isAcpAuthErrorCode(errorCode)
+                  ? () => navigate("/settings/agent")
+                  : undefined
+              }
             />
           )}
 
-          <div className="relative">
-            <div className="pointer-events-none absolute inset-x-0 bottom-full mb-1 z-20">
-              <div className="flex justify-between relative">
-                <div className="flex items-end gap-1 pointer-events-auto">
-                  <ConfirmationModeEnabled />
-                  {isStartingStatus && (
-                    <ChatStatusIndicator
-                      statusColor={serverStatusColor}
-                      status={serverStatusText}
-                    />
+          {llmBlocked && !isArchivedConversation && <LlmNotConfiguredBanner />}
+
+          {isArchivedConversation ? (
+            // Archived / sandbox-error: show a read-only notice in place of
+            // the chat input. The conversation history above is still visible.
+            <div
+              data-testid="archived-conversation-banner"
+              className="mx-1 px-4 py-3 rounded-lg bg-[var(--oh-surface)] border border-[var(--oh-border-subtle)]"
+            >
+              <p className="text-xs font-semibold text-[var(--oh-foreground)]">
+                {sandboxStatus === "ERROR"
+                  ? t(I18nKey.CHAT_INTERFACE$ERROR_SANDBOX_TITLE)
+                  : t(I18nKey.CHAT_INTERFACE$ARCHIVED_SANDBOX_TITLE)}
+              </p>
+              <p className="text-xs text-[var(--oh-muted)] mt-0.5">
+                {sandboxStatus === "ERROR"
+                  ? t(I18nKey.CHAT_INTERFACE$ERROR_SANDBOX_DESCRIPTION)
+                  : t(I18nKey.CHAT_INTERFACE$ARCHIVED_SANDBOX_DESCRIPTION)}
+              </p>
+            </div>
+          ) : (
+            <div className="relative">
+              <div className="pointer-events-none absolute inset-x-0 bottom-full mb-1 z-20">
+                <div className="flex justify-between relative">
+                  <div className="flex items-end gap-1 pointer-events-auto">
+                    <ConfirmationModeEnabled />
+                    {isStartingStatus && (
+                      <ChatStatusIndicator
+                        statusColor={serverStatusColor}
+                        status={serverStatusText}
+                      />
+                    )}
+                  </div>
+
+                  {!hitBottom ? (
+                    <div className="absolute left-1/2 transform -translate-x-1/2 bottom-0 pointer-events-auto">
+                      <ScrollToBottomButton onClick={scrollDomToBottom} />
+                    </div>
+                  ) : (
+                    curAgentState === AgentState.RUNNING && (
+                      <div className="absolute left-1/2 transform -translate-x-1/2 bottom-0 pointer-events-auto">
+                        <TypingIndicator />
+                      </div>
+                    )
                   )}
                 </div>
-
-                {!hitBottom ? (
-                  <div className="absolute left-1/2 transform -translate-x-1/2 bottom-0 pointer-events-auto">
-                    <ScrollToBottomButton onClick={scrollDomToBottom} />
-                  </div>
-                ) : (
-                  curAgentState === AgentState.RUNNING && (
-                    <div className="absolute left-1/2 transform -translate-x-1/2 bottom-0 pointer-events-auto">
-                      <TypingIndicator />
-                    </div>
-                  )
-                )}
               </div>
-            </div>
 
-            <InteractiveChatBox
-              onSubmit={handleSendMessage}
-              disabled={isNewConversationPending}
-            />
-          </div>
+              <InteractiveChatBox
+                onSubmit={handleSendMessage}
+                disabled={isNewConversationPending || llmBlocked}
+              />
+            </div>
+          )}
         </div>
       </div>
     </ScrollProvider>

@@ -12,17 +12,17 @@ describe("SettingsNavHeader", () => {
     ).toBeInTheDocument();
   });
 
+  // Prop-passthrough contract: consumer-supplied className must land on the
+  // element.
   it("should accept custom className", () => {
     const { container } = render(
       <SettingsNavHeader
         text={I18nKey.SETTINGS$PERSONAL_SETTINGS_HEADER}
-        className="px-2 pt-2 pb-1"
+        className="custom-class"
       />,
     );
 
     const wrapper = container.firstChild;
-    expect(wrapper).toHaveClass("px-2");
-    expect(wrapper).toHaveClass("pt-2");
-    expect(wrapper).toHaveClass("pb-1");
+    expect(wrapper).toHaveClass("custom-class");
   });
 });

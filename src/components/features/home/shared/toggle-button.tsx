@@ -1,5 +1,10 @@
+import { useTranslation } from "react-i18next";
+import {
+  ComboboxCaretIcon,
+  comboboxCaretButtonClassName,
+} from "#/ui/combobox-caret";
 import { cn } from "#/utils/utils";
-import ChevronDownSmallIcon from "#/icons/chevron-down-small.svg?react";
+import { I18nKey } from "#/i18n/declaration";
 
 interface ToggleButtonProps {
   isOpen: boolean;
@@ -16,25 +21,23 @@ export function ToggleButton({
   getToggleButtonProps,
   iconClassName,
 }: ToggleButtonProps) {
+  const { t } = useTranslation("openhands");
+
   return (
     <button
       {...getToggleButtonProps({
         disabled,
         className: cn(
-          "text-[#fff]",
-          "disabled:cursor-not-allowed disabled:opacity-60",
+          comboboxCaretButtonClassName,
+          "text-current",
+          isOpen && "rotate-180",
+          disabled && "cursor-not-allowed opacity-60",
         ),
       })}
       type="button"
-      aria-label="Toggle menu"
+      aria-label={t(I18nKey.COMMON$TOGGLE_MENU)}
     >
-      <ChevronDownSmallIcon
-        className={cn(
-          "w-4 h-4 transition-transform",
-          isOpen && "rotate-180",
-          iconClassName,
-        )}
-      />
+      <ComboboxCaretIcon className={iconClassName} />
     </button>
   );
 }

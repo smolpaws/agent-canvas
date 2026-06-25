@@ -1,16 +1,27 @@
 import React from "react";
-import { useRouteError, isRouteErrorResponse, Outlet } from "react-router";
+import {
+  useRouteError,
+  isRouteErrorResponse,
+  Outlet,
+  useLocation,
+} from "react-router";
 import { useTranslation } from "react-i18next";
 import { I18nKey } from "#/i18n/declaration";
 import i18n from "#/i18n";
 import { useConfig } from "#/hooks/query/use-config";
 import { Sidebar } from "#/components/features/sidebar/sidebar";
+import { SidebarMobileNavProvider } from "#/components/features/sidebar/sidebar-mobile-nav-context";
+import { SidebarMobileMenuBar } from "#/components/features/sidebar/sidebar-mobile-menu-bar";
 import { useSettings } from "#/hooks/query/use-settings";
 import { useMigrateUserConsent } from "#/hooks/use-migrate-user-consent";
+import { useEnsureActiveProfile } from "#/hooks/use-ensure-active-profile";
 import { useSyncPostHogConsent } from "#/hooks/use-sync-posthog-consent";
+import { usePostHogIdentify } from "#/hooks/use-posthog-identify";
 import { LoadingSpinner } from "#/components/shared/loading-spinner";
 import { useAppTitle } from "#/hooks/use-app-title";
 import { ReactRouterNavigationProvider } from "./react-router-navigation-provider";
+import { OnboardingHost } from "#/components/features/onboarding";
+import { isOnboardingPreviewActive } from "#/components/features/onboarding/onboarding-preview";
 
 // Lazy-load components that are only rendered conditionally — keeps them out
 // of the root layout's eager dev/prod graph (and out of every page's first
@@ -63,6 +74,7 @@ export function ErrorBoundary() {
 }
 
 export default function MainApp() {
+  const location = useLocation();
   const appTitle = useAppTitle();
   const { data: settings } = useSettings();
   const { migrateUserConsent } = useMigrateUserConsent();
@@ -71,6 +83,9 @@ export default function MainApp() {
   const [consentFormIsOpen, setConsentFormIsOpen] = React.useState(false);
 
   useSyncPostHogConsent();
+  usePostHogIdentify();
+  // Local-mode policy: keep a profile active so a usable LLM is always selected.
+  useEnsureActiveProfile();
 
   React.useEffect(() => {
     if (settings?.language) {
@@ -98,51 +113,62 @@ export default function MainApp() {
     );
   }
 
+  // Conversation + full-screen panel routes put the mobile menu control in the
+  // chat / panel header; omit the extra top row so we don't duplicate chrome.
+  const hideMobileSidebarMenuBar = /^\/conversations\/[^/]+/.test(
+    location.pathname,
+  );
+  const showOnboardingPreview = isOnboardingPreviewActive(location.search);
+
   return (
     <ReactRouterNavigationProvider>
-      <div
-        data-testid="root-layout"
-        className="h-screen lg:min-w-5xl flex flex-col md:flex-row bg-base overflow-hidden p-0"
-      >
-        <title>{appTitle}</title>
-        <Sidebar />
+      <SidebarMobileNavProvider>
+        <div
+          data-testid="root-layout"
+          className="h-screen lg:min-w-5xl flex flex-col md:flex-row bg-base overflow-hidden p-0"
+        >
+          <title>{appTitle}</title>
+          <Sidebar />
 
-        <div className="flex flex-col w-full min-w-0 h-[calc(100%-50px)] md:h-full gap-3">
-          {config.data &&
-            (config.data.maintenance_start_time ||
-              (config.data.faulty_models &&
-                config.data.faulty_models.length > 0) ||
-              config.data.error_message) && (
-              <React.Suspense fallback={null}>
-                <AlertBanner
-                  maintenanceStartTime={config.data.maintenance_start_time}
-                  faultyModels={config.data.faulty_models}
-                  errorMessage={config.data.error_message}
-                  updatedAt={config.data.updated_at}
-                />
-              </React.Suspense>
-            )}
-          <div
-            id="root-outlet"
-            className="flex-1 relative overflow-auto custom-scrollbar"
-          >
-            <Outlet />
+          <div className="flex min-h-0 flex-col w-full min-w-0 h-full gap-3">
+            {!hideMobileSidebarMenuBar ? <SidebarMobileMenuBar /> : null}
+            {config.data &&
+              (config.data.maintenance_start_time ||
+                (config.data.faulty_models &&
+                  config.data.faulty_models.length > 0) ||
+                config.data.error_message) && (
+                <React.Suspense fallback={null}>
+                  <AlertBanner
+                    maintenanceStartTime={config.data.maintenance_start_time}
+                    faultyModels={config.data.faulty_models}
+                    errorMessage={config.data.error_message}
+                    updatedAt={config.data.updated_at}
+                  />
+                </React.Suspense>
+              )}
+            <div
+              id="root-outlet"
+              className="relative flex-1 overflow-auto px-0 custom-scrollbar"
+            >
+              <Outlet />
+            </div>
           </div>
-        </div>
 
-        {consentFormIsOpen && (
-          <React.Suspense fallback={null}>
-            <AnalyticsConsentFormModal
-              onClose={() => {
-                setConsentFormIsOpen(false);
-              }}
-            />
-          </React.Suspense>
-        )}
-      </div>
-      <React.Suspense fallback={null}>
-        <EnvironmentSwitchOverlay />
-      </React.Suspense>
+          {consentFormIsOpen && (
+            <React.Suspense fallback={null}>
+              <AnalyticsConsentFormModal
+                onClose={() => {
+                  setConsentFormIsOpen(false);
+                }}
+              />
+            </React.Suspense>
+          )}
+        </div>
+        <React.Suspense fallback={null}>
+          <EnvironmentSwitchOverlay />
+        </React.Suspense>
+        {showOnboardingPreview ? <OnboardingHost /> : null}
+      </SidebarMobileNavProvider>
     </ReactRouterNavigationProvider>
   );
 }

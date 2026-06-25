@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 
+import { NoFileSelectedMessage } from "#/components/features/files-tab/no-file-selected-message";
 import { I18nKey } from "#/i18n/declaration";
 import { useFilesTabStore } from "#/stores/files-tab-store";
 import { useWorkspaceFiles } from "#/hooks/query/use-workspace-files";
@@ -12,6 +13,10 @@ import { useAutoRefreshFilesOnEdit } from "#/hooks/use-auto-refresh-files-on-edi
 import { useUnifiedGetGitChanges } from "#/hooks/query/use-unified-get-git-changes";
 import { useOptionalConversationId } from "#/hooks/use-conversation-id";
 import { useConversationLocalStorageState } from "#/utils/conversation-local-storage";
+import {
+  useWorkspaceMutationCounter,
+  withWorkspaceCacheBuster,
+} from "#/stores/use-workspace-mutation-counter";
 import { sortFilesByPriority } from "#/utils/file-priority";
 import { FileQuickRow } from "#/components/features/files-tab/file-quick-row";
 import { FileTreeView } from "#/components/features/files-tab/file-tree-view";
@@ -65,23 +70,49 @@ function FilesTab() {
   const filesQuery = useWorkspaceFiles();
   const paths = useMemo(() => filesQuery.data ?? [], [filesQuery.data]);
 
-  const selectedPath = useFilesTabStore((s) => s.selectedPath);
+  const storedSelectedPath = useFilesTabStore((s) => s.selectedPath);
+  const selectedConversationId = useFilesTabStore(
+    (s) => s.selectedConversationId,
+  );
   const setSelectedPath = useFilesTabStore((s) => s.setSelectedPath);
+
+  // A selection is scoped to the conversation it was made in. Ignore a path
+  // that belongs to a different conversation so we never try to open a file
+  // that only exists in the previous conversation's workspace (issue #1350).
+  // The auto-select effect below then picks this conversation's top file.
+  const selectedPath =
+    selectedConversationId === conversationId ? storedSelectedPath : null;
+
+  // Tag every selection with the active conversation so it can't leak into
+  // the next one. FileQuickRow / FileTreeView call this with just the path.
+  const handleSelectFile = useCallback(
+    (path: string) => setSelectedPath(path, conversationId),
+    [conversationId, setSelectedPath],
+  );
 
   // Pre-fetch the selected file's content here too so the toolbar's
   // "open in new window" link can reach for its `staticUrl`. react-query
   // dedupes against `FileContentViewer`'s identical call, so this costs
   // nothing extra.
   const selectedFileContent = useWorkspaceFileContent(selectedPath);
-  const selectedFileStaticUrl = selectedFileContent.data?.staticUrl ?? null;
+  const mutationCounter = useWorkspaceMutationCounter((state) => state.count);
+  const selectedFileStaticUrl = withWorkspaceCacheBuster(
+    selectedFileContent.data?.staticUrl ?? null,
+    mutationCounter,
+  );
+
+  useEffect(() => {
+    if (selectedConversationId === conversationId) return;
+    setSelectedPath(null, conversationId);
+  }, [selectedConversationId, conversationId, setSelectedPath]);
 
   // Auto-select the highest-priority file the first time we load the list,
   // so users see something useful immediately.
   useEffect(() => {
     if (selectedPath || paths.length === 0) return;
     const [first] = sortFilesByPriority(paths);
-    if (first) setSelectedPath(first);
-  }, [paths, selectedPath]);
+    if (first) setSelectedPath(first, conversationId);
+  }, [paths, selectedPath, conversationId, setSelectedPath]);
 
   // Refresh button: covers the diff view (git changes) and the file viewer
   // (workspace listing + cached file contents). Lives in this toolbar — not
@@ -131,7 +162,7 @@ function FilesTab() {
         <div className="ml-auto flex items-center gap-1">
           {/* Open the currently-selected file in a new browser tab. Only
               meaningful while we're showing a file (not the diff view) and
-              we've resolved its browser-renderable preview URL. */}
+              we've resolved its staticUrl from the workspace fileserver. */}
           {!diffViewEnabled && selectedFileStaticUrl && (
             <a
               href={selectedFileStaticUrl}
@@ -179,11 +210,11 @@ function FilesTab() {
               <FileQuickRow
                 paths={paths}
                 selectedPath={selectedPath}
-                onSelectFile={setSelectedPath}
+                onSelectFile={handleSelectFile}
                 isTreeVisible={isTreeVisible}
                 onToggleTree={() => setIsTreeVisible((prev) => !prev)}
               />
-              <div className="flex flex-1 min-h-0">
+              <div className="flex h-full min-h-0 flex-1">
                 {isTreeVisible && (
                   <aside
                     className="w-56 shrink-0 border-r border-[var(--oh-border)] overflow-y-auto custom-scrollbar-always"
@@ -192,12 +223,12 @@ function FilesTab() {
                     <FileTreeView
                       paths={paths}
                       selectedPath={selectedPath}
-                      onSelectFile={setSelectedPath}
+                      onSelectFile={handleSelectFile}
                     />
                   </aside>
                 )}
                 <section
-                  className="flex-1 min-w-0 min-h-0"
+                  className="flex h-full min-h-0 min-w-0 flex-1 flex-col"
                   data-testid="files-tab-content"
                 >
                   {selectedPath ? (
@@ -206,9 +237,7 @@ function FilesTab() {
                       viewMode={contentViewMode}
                     />
                   ) : (
-                    <div className="flex h-full w-full items-center justify-center text-sm text-[var(--oh-muted)]">
-                      {t(I18nKey.FILES$NO_FILE_SELECTED)}
-                    </div>
+                    <NoFileSelectedMessage />
                   )}
                 </section>
               </div>

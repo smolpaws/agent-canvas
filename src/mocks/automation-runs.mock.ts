@@ -19,6 +19,9 @@ function makeRun(
     id,
     status,
     conversation_id: hasConversation ? `conv-${id}` : null,
+    // Runs that have a conversation also have a bash command; runs that
+    // failed before sandbox creation have neither.
+    bash_command_id: hasConversation ? `cmd-${id}` : null,
     error_detail:
       status === AutomationRunStatus.FAILED
         ? "Process exited with code 1"
@@ -58,4 +61,15 @@ export const MOCK_AUTOMATION_RUNS: Record<string, AutomationRun[]> = {
     makeRun("r4-02", AutomationRunStatus.COMPLETED, 21, 11),
   ],
   "a1000000-0000-0000-0000-000000000005": [],
+  "a1000000-0000-0000-0000-000000000006": [
+    makeRun("r6-01", AutomationRunStatus.COMPLETED, 0, 14),
+    makeRun("r6-02", AutomationRunStatus.COMPLETED, 0, 11),
+    makeRun("r6-03", AutomationRunStatus.FAILED, 1, 16),
+    makeRun("r6-04", AutomationRunStatus.COMPLETED, 2, 10),
+    makeRun("r6-05", AutomationRunStatus.COMPLETED, 3, 9),
+  ],
+  "a1000000-0000-0000-0000-000000000007": [
+    makeRun("r7-01", AutomationRunStatus.COMPLETED, 3, 15),
+    makeRun("r7-02", AutomationRunStatus.COMPLETED, 10, 12),
+  ],
 };

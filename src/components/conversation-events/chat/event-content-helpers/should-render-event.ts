@@ -7,6 +7,7 @@ import {
   isConversationStateUpdateEvent,
   isHookExecutionEvent,
   isACPToolCallEvent,
+  isStreamingDeltaEvent,
 } from "#/types/agent-server/type-guards";
 
 export const shouldRenderEvent = (event: OpenHandsEvent) => {
@@ -34,11 +35,27 @@ export const shouldRenderEvent = (event: OpenHandsEvent) => {
       return false;
     }
 
+    // The model switch tool reuses the same inline model message UI as
+    // `/model <profile>` once the observation arrives.
+    if (actionType === "SwitchLLMAction") {
+      return false;
+    }
+
     return true;
   }
 
   // Render observation events
   if (isObservationEvent(event)) {
+    // Successful model switches are rendered through ModelMessages so they
+    // look identical to `/model <profile>` confirmations. Failed switches
+    // still render as observations so the error remains visible in chat.
+    if (
+      event.observation.kind === "SwitchLLMObservation" &&
+      !event.observation.is_error
+    ) {
+      return false;
+    }
+
     return true;
   }
 
@@ -57,10 +74,23 @@ export const shouldRenderEvent = (event: OpenHandsEvent) => {
     return true;
   }
 
-  // Render ACP sub-agent tool call events — suppress in_progress (empty args)
-  // so the card only appears once fully populated.
+  // Render ACP sub-agent tool call events at every lifecycle stage. The SDK
+  // now persists exactly two events per ``tool_call_id`` — one early
+  // ``started`` event (``pending`` / ``in_progress``) and one terminal
+  // (``completed`` / ``failed``) event — the action->observation pair for a
+  // tool call. The ``started`` event renders the card as "running" (no check
+  // mark; see ``getACPToolCallResult``) and ``handleEventForUI`` replaces it
+  // in place by ``tool_call_id`` once the terminal event arrives, mirroring
+  // how an ObservationEvent supersedes its ActionEvent. The old terminal-only
+  // gate existed because the source fanned out one cumulative-output frame per
+  // ``ToolCallProgress``, which flashed half-formed cards mid-stream; that
+  // fan-out is gone, so the running card is now a single clean event.
   if (isACPToolCallEvent(event)) {
-    return event.status !== "in_progress";
+    return true;
+  }
+
+  if (isStreamingDeltaEvent(event)) {
+    return event.content !== null || event.reasoning_content !== null;
   }
 
   // Don't render any other event types (system events, etc.)

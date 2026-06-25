@@ -3,6 +3,17 @@ import { Provider } from "#/types/settings";
 import { SuggestedTask } from "#/utils/types";
 import { ExecutionStatus } from "#/types/agent-server/core";
 
+/**
+ * Lifecycle state of a cloud sandbox. Mirrors OpenHands' V1SandboxStatus.
+ * Local agent-server conversations do not carry this field (null).
+ */
+export type SandboxStatus =
+  | "PAUSED"
+  | "RUNNING"
+  | "STARTING"
+  | "MISSING"
+  | "ERROR";
+
 // Plugin specification for starting conversations with plugins
 export interface PluginSpec {
   source: string; // Plugin source: 'github:owner/repo', git URL, or local path
@@ -49,6 +60,11 @@ export interface SendMessageRequest {
 }
 
 export interface AppConversationStartRequest {
+  // Re-provision an EXISTING conversation (waking a recycled sandbox) instead
+  // of minting a new one. The backend keys the rebuilt conversation on this id
+  // and, for ACP, resumes it from the durable event store with a bootstrap
+  // prompt (OpenHands#14640). Omit/null to create a fresh conversation.
+  conversation_id?: string | null;
   initial_message?: SendMessageRequest | null;
   processors?: unknown[]; // EventCallbackProcessor - keeping as unknown for now
   llm_model?: string | null;
@@ -111,15 +127,59 @@ export interface AppConversation {
   title: string | null;
   trigger: ConversationTrigger | null;
   pr_number: number[];
+  /**
+   * High-level kind of the conversation's agent — ``"openhands"`` for an LLM-
+   * driven Agent, ``"acp"`` for an ACPAgent that delegates to an external
+   * ACP CLI subprocess. Consumers can use this to gate UI affordances that
+   * only make sense for one kind (e.g. the LLM-profile switcher in the chat
+   * header is a no-op for ACP conversations even though ``llm_model`` may
+   * carry the ACP subprocess model for display).
+   */
+  agent_kind?: "openhands" | "acp" | null;
+  /**
+   * For ACP conversations, the registry key of the ACP CLI server the
+   * conversation was launched against (e.g. ``"claude-code"``, ``"codex"``,
+   * ``"gemini-cli"``). Populated from ``info.tags.acpserver`` — see
+   * ``ACP_SERVER_TAG_KEY`` in ``agent-server-adapter.ts`` for the wire
+   * format and the rationale behind the snake_case-incompatible
+   * ``acpserver`` form. ``null`` for OpenHands conversations and for ACP
+   * conversations whose tag wasn't stamped (e.g. created via an older
+   * client or via the raw API). Consumers resolve the display name via
+   * ``getAcpProviderDisplayName(acp_server)`` and fall back to a generic
+   * "ACP" chip when the key is unknown or null.
+   */
+  acp_server?: string | null;
   llm_model: string | null;
   metrics: MetricsSnapshot | null;
   created_at: string;
   updated_at: string;
   execution_status: ExecutionStatus | null;
+  /**
+   * Cloud-only sandbox lifecycle status. Mirrors OpenHands' V1SandboxStatus.
+   * Absent / null for local agent-server conversations.
+   */
+  sandbox_status?: SandboxStatus | null;
   conversation_url: string | null;
   session_api_key: string | null;
   sandbox_id: string | null;
   workspace?: ConversationWorkspace | null;
+  /**
+   * The local workspace the user explicitly attached when creating this
+   * conversation. Client-side only — never round-tripped to the agent-server
+   * or cloud. Null/undefined for conversations created via "No workspace".
+   * Distinct from `workspace.working_dir`, which is the runtime path and may
+   * either match this folder directly or point at a per-conversation worktree.
+   */
+  selected_workspace?: string | null;
+  /**
+   * The LLM profile this conversation was created with / last switched to.
+   * Hydrated from client-side metadata (see
+   * `ConversationMetadata.active_profile`). Preferred over matching
+   * `llm_model` against the profile list, which is ambiguous when several
+   * profiles share a model (#1082). Null when unknown (e.g. created by an
+   * older client) — consumers fall back to model-matching.
+   */
+  active_profile?: string | null;
   public?: boolean;
   sub_conversation_ids: string[];
 }

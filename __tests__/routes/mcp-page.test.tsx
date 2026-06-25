@@ -1,8 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import {
+  render,
+  screen,
+  within,
+  fireEvent,
+  waitFor,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import MCPPage from "#/routes/mcp";
 import SettingsService from "#/api/settings-service/settings-service.api";
+import McpService from "#/api/mcp-service/mcp-service.api";
 import { MOCK_DEFAULT_USER_SETTINGS } from "#/mocks/handlers";
 import { Settings } from "#/types/settings";
 import { ActiveBackendProvider } from "#/contexts/active-backend-context";
@@ -36,6 +43,11 @@ function renderPage() {
 describe("MCPPage", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    // Pre-flight connectivity test must pass so save mutations are reached.
+    vi.spyOn(McpService, "testServer").mockResolvedValue({
+      ok: true,
+      tools: [],
+    });
   });
 
   it("renders the empty installed state and the marketplace", async () => {
@@ -83,11 +95,16 @@ describe("MCPPage", () => {
       expect(screen.getByTestId("mcp-install-modal")).toBeInTheDocument();
     });
     expect(
+      screen.getByTestId("mcp-install-field-command-readonly"),
+    ).toHaveValue("npx -y @zencoderai/slack-mcp-server");
+    expect(
       screen.getByTestId("mcp-install-field-SLACK_BOT_TOKEN"),
     ).toBeInTheDocument();
     expect(
       screen.getByTestId("mcp-install-field-SLACK_TEAM_ID"),
     ).toBeInTheDocument();
+    expect(screen.queryByTestId("mcp-install-field-url")).toBeNull();
+    expect(screen.queryByTestId("mcp-install-field-api_key")).toBeNull();
   });
 
   it("filters marketplace tiles by the search input", async () => {
@@ -107,8 +124,80 @@ describe("MCPPage", () => {
       screen.queryByTestId("mcp-marketplace-card-github"),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByTestId("mcp-marketplace-card-postgres"),
+      screen.queryByTestId("mcp-marketplace-card-gitlab"),
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps installed custom servers visible and searchable even when they are not in the marketplace catalog", async () => {
+    vi.spyOn(SettingsService, "getSettings").mockResolvedValue(
+      buildSettings({
+        agent_settings: {
+          ...MOCK_DEFAULT_USER_SETTINGS.agent_settings,
+          mcp_config: {
+            mcpServers: {
+              acme_internal: {
+                command: "npx",
+                args: ["-y", "@acme/internal-mcp-server"],
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    renderPage();
+
+    await screen.findByTestId("mcp-installed-list");
+    expect(screen.getByText("acme_internal")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("mcp-marketplace-card-acme_internal"),
+    ).not.toBeInTheDocument();
+
+    const search = screen.getByTestId("mcp-search-input");
+    fireEvent.change(search, { target: { value: "internal-mcp-server" } });
+
+    await waitFor(() => {
+      expect(screen.getByText("acme_internal")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("mcp-marketplace-empty")).toBeInTheDocument();
+  });
+
+  it("hides the library section when the section filter is Installed", async () => {
+    vi.spyOn(SettingsService, "getSettings").mockResolvedValue(buildSettings());
+
+    renderPage();
+
+    await screen.findByTestId("mcp-marketplace-section");
+
+    const filter = screen.getByTestId("mcp-section-filter");
+    fireEvent.click(within(filter).getByTestId("dropdown-trigger"));
+    fireEvent.click(screen.getByTestId("mcp-section-filter-installed"));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("mcp-marketplace-section"),
+      ).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId("mcp-installed-empty")).toBeInTheDocument();
+  });
+
+  it("hides the installed section when the section filter is Library", async () => {
+    vi.spyOn(SettingsService, "getSettings").mockResolvedValue(buildSettings());
+
+    renderPage();
+
+    await screen.findByTestId("mcp-installed-empty");
+
+    const filter = screen.getByTestId("mcp-section-filter");
+    fireEvent.click(within(filter).getByTestId("dropdown-trigger"));
+    fireEvent.click(screen.getByTestId("mcp-section-filter-library"));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("mcp-installed-empty"),
+      ).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId("mcp-marketplace-section")).toBeInTheDocument();
   });
 
   it("shows a search-empty state when the query matches nothing", async () => {
@@ -126,6 +215,31 @@ describe("MCPPage", () => {
     });
   });
 
+  it("opens the server editor when an installed server card is clicked", async () => {
+    vi.spyOn(SettingsService, "getSettings").mockResolvedValue(
+      buildSettings({
+        agent_settings: {
+          ...MOCK_DEFAULT_USER_SETTINGS.agent_settings,
+          mcp_config: {
+            mcpServers: {
+              slack: {
+                command: "npx",
+                args: ["-y", "@zencoderai/slack-mcp-server"],
+                env: { SLACK_BOT_TOKEN: "xoxb-abc", SLACK_TEAM_ID: "T01" },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    renderPage();
+
+    fireEvent.click(await screen.findByTestId("mcp-server-item"));
+
+    expect(await screen.findByTestId("mcp-custom-editor")).toBeInTheDocument();
+  });
+
   it("deletes an installed stdio server through the confirmation modal", async () => {
     // Pre-install a Slack stdio server via the SDK-shaped mcp_config
     // the route reads from agent_settings.mcp_config.
@@ -136,7 +250,7 @@ describe("MCPPage", () => {
           mcpServers: {
             slack: {
               command: "npx",
-              args: ["-y", "@modelcontextprotocol/server-slack"],
+              args: ["-y", "@zencoderai/slack-mcp-server"],
               env: { SLACK_BOT_TOKEN: "xoxb-abc", SLACK_TEAM_ID: "T01" },
             },
           },
@@ -152,7 +266,7 @@ describe("MCPPage", () => {
 
     renderPage();
 
-    const deleteBtn = await screen.findByTestId("delete-mcp-server-button");
+    const deleteBtn = await screen.findByTestId("mcp-installed-toggle-stdio-0");
     fireEvent.click(deleteBtn);
 
     const confirmBtn = await screen.findByTestId("confirm-button");
@@ -166,11 +280,39 @@ describe("MCPPage", () => {
     expect(sent.mcp_config).toBeNull();
   });
 
-  it("badges Tavily as installed when the persisted mcp_config contains it", async () => {
-    // Tavily is now a regular stdio MCP entry (it used to claim to be
-    // a built-in driven by search_api_key, but that field was never
-    // forwarded to either backend). Installation status comes from
-    // the same mcp_config lookup as every other entry.
+  it("shows the catalog description and URL on installed server cards", async () => {
+    vi.spyOn(SettingsService, "getSettings").mockResolvedValue(
+      buildSettings({
+        agent_settings: {
+          ...MOCK_DEFAULT_USER_SETTINGS.agent_settings,
+          mcp_config: {
+            mcpServers: {
+              github: {
+                url: "https://api.githubcopilot.com/mcp/",
+                auth: "github_pat_test",
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    renderPage();
+
+    const card = await screen.findByTestId("mcp-server-item");
+    expect(
+      within(card).getByTestId("mcp-server-description-shttp-0"),
+    ).toHaveTextContent(
+      "Search code, manage issues and pull requests, and inspect repos via the GitHub API.",
+    );
+    expect(
+      within(card).getByTestId("mcp-server-detail-shttp-0"),
+    ).toHaveTextContent("https://api.githubcopilot.com/mcp/");
+  });
+
+  it("shows Tavily marketplace toggle as add-only when installed", async () => {
+    // Library cards always show the add (+) affordance so users can
+    // install multiple instances of the same template.
     vi.spyOn(SettingsService, "getSettings").mockResolvedValue(
       buildSettings({
         agent_settings: {
@@ -191,9 +333,10 @@ describe("MCPPage", () => {
     renderPage();
 
     await screen.findByTestId("mcp-marketplace-card-tavily");
-    expect(
-      screen.getByTestId("mcp-marketplace-installed-tavily"),
-    ).toBeInTheDocument();
+    expect(screen.getByTestId("mcp-marketplace-toggle-tavily")).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
     expect(screen.getByTestId("mcp-installed-list")).toBeInTheDocument();
   });
 
@@ -212,7 +355,7 @@ describe("MCPPage", () => {
             mcpServers: {
               slack: {
                 command: "npx",
-                args: ["-y", "@modelcontextprotocol/server-slack"],
+                args: ["-y", "@zencoderai/slack-mcp-server"],
                 env: { SLACK_BOT_TOKEN: "xoxb-old", SLACK_TEAM_ID: "T01" },
               },
             },
@@ -227,11 +370,10 @@ describe("MCPPage", () => {
     renderPage();
 
     const tile = await screen.findByTestId("mcp-marketplace-card-slack");
-    // The tile shows the Installed badge but the click should still
-    // open an add-flow modal — not jump to an edit form.
-    expect(
-      screen.getByTestId("mcp-marketplace-installed-slack"),
-    ).toBeInTheDocument();
+    expect(screen.getByTestId("mcp-marketplace-toggle-slack")).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
     fireEvent.click(tile);
 
     await screen.findByTestId("mcp-install-modal");
@@ -253,9 +395,8 @@ describe("MCPPage", () => {
       .agent_settings_diff as {
       mcp_config: { mcpServers: Record<string, unknown> };
     };
-    // The original Slack entry is preserved AND a second one is added
-    // alongside it (suffix-collided name comes from the per-base
-    // uniqueness logic in toSdkMcpConfig).
+    // The original Slack stdio entry is preserved and the new stdio
+    // install is suffixed rather than overwriting it.
     expect(Object.keys(sent.mcp_config.mcpServers).sort()).toEqual([
       "slack",
       "slack_1",

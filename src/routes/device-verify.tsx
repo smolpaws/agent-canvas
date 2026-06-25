@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useIsAuthed } from "#/hooks/query/use-is-authed";
 import { I18nKey } from "#/i18n/declaration";
 import { H1 } from "#/ui/typography";
+import { cn } from "#/utils/utils";
 
 export default function DeviceVerify() {
   const { t } = useTranslation("openhands");
@@ -66,7 +67,10 @@ export default function DeviceVerify() {
         <div className="max-w-md w-full mx-auto p-6 bg-card rounded-lg shadow-lg">
           <div className="text-center">
             <div
-              className={`mb-4 ${verificationResult.success ? "text-green-600" : "text-red-600"}`}
+              className={cn(
+                "mb-4",
+                verificationResult.success ? "text-green-600" : "text-red-600",
+              )}
             >
               {verificationResult.success ? (
                 <svg
@@ -98,7 +102,7 @@ export default function DeviceVerify() {
                 </svg>
               )}
             </div>
-            <h2 className="text-xl font-semibold mb-2">
+            <h2 className="text-xl font-medium mb-2">
               {verificationResult.success
                 ? t(I18nKey.DEVICE$SUCCESS_TITLE)
                 : t(I18nKey.DEVICE$ERROR_TITLE)}

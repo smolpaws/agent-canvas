@@ -15,9 +15,6 @@ describe("table (markdown)", () => {
 
     const table = screen.getByRole("table");
     expect(table).toBeInTheDocument();
-    // border-collapse + border is what makes columns visually separate
-    expect(table).toHaveClass("border-collapse");
-    expect(table).toHaveClass("border");
   });
 
   it("should wrap the table in a horizontally scrollable container", () => {
@@ -25,13 +22,42 @@ describe("table (markdown)", () => {
       <MarkdownRenderer>{GFM_TABLE}</MarkdownRenderer>,
     );
 
-    // Wide tables must not break chat layout — wrapper enables overflow
-    const wrapper = container.querySelector(".overflow-x-auto");
-    expect(wrapper).not.toBeNull();
-    expect(wrapper?.querySelector("table")).not.toBeNull();
+    const wrapper = screen.getByTestId("markdown-table-scroll");
+    expect(wrapper).toHaveClass("overflow-x-auto");
+    expect(wrapper).toHaveClass("custom-scrollbar-always");
+    expect(wrapper).toHaveClass("max-w-full");
+    expect(wrapper.querySelector("table")).not.toBeNull();
+    expect(container.querySelector(".overflow-x-auto")).not.toBeNull();
   });
 
-  it("should render header cells as styled <th> elements", () => {
+  it("should round corners on the table element", () => {
+    render(<MarkdownRenderer>{GFM_TABLE}</MarkdownRenderer>);
+
+    const table = screen.getByRole("table");
+    expect(table).toHaveClass("rounded-xl");
+    expect(table).toHaveClass("overflow-hidden");
+
+    const wrapper = screen.getByTestId("markdown-table-scroll");
+    expect(wrapper).not.toHaveClass("rounded-xl");
+
+    expect(
+      screen.getByTestId("markdown-table-scroll-fade-left"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("markdown-table-scroll-fade-right"),
+    ).toBeInTheDocument();
+  });
+
+  it("should let wide tables grow beyond the chat column instead of squishing columns", () => {
+    render(<MarkdownRenderer>{GFM_TABLE}</MarkdownRenderer>);
+
+    const table = screen.getByRole("table");
+    expect(table).toHaveClass("w-max");
+    expect(table).toHaveClass("min-w-full");
+    expect(table).not.toHaveClass("w-full");
+  });
+
+  it("should render header cells as <th> elements with correct content", () => {
     render(<MarkdownRenderer>{GFM_TABLE}</MarkdownRenderer>);
 
     const headers = screen.getAllByRole("columnheader");
@@ -39,26 +65,15 @@ describe("table (markdown)", () => {
     expect(headers[0]).toHaveTextContent("Feature");
     expect(headers[1]).toHaveTextContent("OpenAI Codex");
     expect(headers[2]).toHaveTextContent("Claude Code");
-    // Padding + border is what was missing before the fix
-    headers.forEach((h) => {
-      expect(h).toHaveClass("border");
-      expect(h).toHaveClass("px-3");
-      expect(h).toHaveClass("py-2");
-    });
   });
 
-  it("should render body cells as styled <td> elements", () => {
+  it("should render body cells as <td> elements with correct content", () => {
     render(<MarkdownRenderer>{GFM_TABLE}</MarkdownRenderer>);
 
     const cells = screen.getAllByRole("cell");
     expect(cells).toHaveLength(6);
     expect(cells[0]).toHaveTextContent("CLI");
     expect(cells[3]).toHaveTextContent("Mobile");
-    cells.forEach((c) => {
-      expect(c).toHaveClass("border");
-      expect(c).toHaveClass("px-3");
-      expect(c).toHaveClass("py-2");
-    });
   });
 
   it("should not render table markdown as plain paragraph text", () => {

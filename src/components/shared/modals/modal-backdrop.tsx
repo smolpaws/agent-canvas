@@ -1,10 +1,13 @@
 import React from "react";
+import { createPortal } from "react-dom";
 
 interface ModalBackdropProps {
   children: React.ReactNode;
   onClose?: () => void;
   /** When false, pressing Escape does not close the modal. Defaults to true. */
   closeOnEscape?: boolean;
+  /** When false, clicking the backdrop does not close the modal. Defaults to true. */
+  closeOnBackdropClick?: boolean;
   "aria-label"?: string;
 }
 
@@ -12,6 +15,7 @@ export function ModalBackdrop({
   children,
   onClose,
   closeOnEscape = true,
+  closeOnBackdropClick = true,
   "aria-label": ariaLabel,
 }: ModalBackdropProps) {
   React.useEffect(() => {
@@ -25,10 +29,18 @@ export function ModalBackdrop({
   }, [closeOnEscape, onClose]);
 
   const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!closeOnBackdropClick) return;
     if (e.target === e.currentTarget) onClose?.(); // only close if the click was on the backdrop
   };
 
-  return (
+  if (typeof document === "undefined") return null;
+
+  // Portal to document.body so the modal's `position: fixed` resolves
+  // against the viewport. Otherwise a transformed ancestor (e.g. the
+  // onboarding slide rail) would become the containing block and the
+  // modal would render trapped inside it instead of overlapping its
+  // parent modal.
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
@@ -40,6 +52,7 @@ export function ModalBackdrop({
         className="fixed inset-0 bg-black opacity-60"
       />
       <div className="relative">{children}</div>
-    </div>
+    </div>,
+    document.body,
   );
 }

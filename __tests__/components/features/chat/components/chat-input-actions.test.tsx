@@ -12,7 +12,13 @@ import type { Backend } from "#/api/backend-registry/types";
 
 const useActiveConversationMock = vi.fn<
   () => {
-    data: { conversation_id: string; llm_model: string | null } | undefined;
+    data:
+      | {
+          conversation_id: string;
+          agent_kind?: "openhands" | "acp";
+          llm_model: string | null;
+        }
+      | undefined;
   }
 >(() => ({ data: undefined }));
 
@@ -20,12 +26,12 @@ vi.mock("#/components/features/controls/agent-status", () => ({
   AgentStatus: () => <div data-testid="agent-status-stub" />,
 }));
 
-vi.mock("#/components/features/controls/tools", () => ({
-  Tools: () => <div data-testid="tools-stub" />,
-}));
-
 vi.mock("#/components/features/chat/change-agent-button", () => ({
   ChangeAgentButton: () => <div data-testid="change-agent-button-stub" />,
+}));
+
+vi.mock("#/components/features/chat/switch-profile-button", () => ({
+  SwitchProfileButton: () => <div data-testid="switch-profile-button-stub" />,
 }));
 
 vi.mock("#/hooks/query/use-active-conversation", () => ({
@@ -59,24 +65,74 @@ describe("ChatInputActions", () => {
     useActiveConversationMock.mockReturnValue({ data: undefined });
   });
 
-  it("renders the active conversation model when one is available", () => {
+  it("renders the SwitchProfileButton on a local backend", () => {
     useActiveConversationMock.mockReturnValue({
       data: { conversation_id: "test-conversation-id", llm_model: "gpt-4o" },
     });
 
     renderWithProviders(<ChatInputActions disabled={false} />);
 
+    expect(
+      screen.getByTestId("switch-profile-button-stub"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("chat-input-llm-model"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the static model label for local ACP conversations", () => {
+    useActiveConversationMock.mockReturnValue({
+      data: {
+        conversation_id: "test-conversation-id",
+        agent_kind: "acp",
+        llm_model: "claude-sonnet-4-6",
+      },
+    });
+
+    renderWithProviders(<ChatInputActions disabled={false} />);
+
+    expect(screen.getByTestId("chat-input-llm-model")).toHaveAttribute(
+      "title",
+      "claude-sonnet-4-6",
+    );
+    expect(
+      screen.queryByTestId("switch-profile-button-stub"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the active conversation model on a cloud backend", () => {
+    setRegisteredBackends([cloudBackend]);
+    setActiveSelection({ backendId: cloudBackend.id });
+    useActiveConversationMock.mockReturnValue({
+      data: { conversation_id: "test-conversation-id", llm_model: "gpt-4o" },
+    });
+
+    renderWithProviders(
+      <ActiveBackendProvider>
+        <ChatInputActions disabled={false} />
+      </ActiveBackendProvider>,
+    );
+
     expect(screen.getByTestId("chat-input-llm-model")).toHaveTextContent(
       "gpt-4o",
     );
+    expect(
+      screen.queryByTestId("switch-profile-button-stub"),
+    ).not.toBeInTheDocument();
   });
 
-  it("omits the model label when the active conversation has no llm_model", () => {
+  it("omits the model label on cloud when the active conversation has no llm_model", () => {
+    setRegisteredBackends([cloudBackend]);
+    setActiveSelection({ backendId: cloudBackend.id });
     useActiveConversationMock.mockReturnValue({
       data: { conversation_id: "test-conversation-id", llm_model: null },
     });
 
-    renderWithProviders(<ChatInputActions disabled={false} />);
+    renderWithProviders(
+      <ActiveBackendProvider>
+        <ChatInputActions disabled={false} />
+      </ActiveBackendProvider>,
+    );
 
     expect(
       screen.queryByTestId("chat-input-llm-model"),
@@ -102,5 +158,21 @@ describe("ChatInputActions", () => {
     );
 
     expect(screen.getByTestId("change-agent-button-stub")).toBeInTheDocument();
+  });
+
+  it("shows the Change Agent button on the home page on a cloud backend", () => {
+    setRegisteredBackends([cloudBackend]);
+    setActiveSelection({ backendId: cloudBackend.id });
+
+    renderWithProviders(
+      <ActiveBackendProvider>
+        <ChatInputActions disabled={false} />
+      </ActiveBackendProvider>,
+      { navigation: { conversationId: null } },
+    );
+
+    expect(
+      screen.getByTestId("change-agent-button-stub"),
+    ).toBeInTheDocument();
   });
 });

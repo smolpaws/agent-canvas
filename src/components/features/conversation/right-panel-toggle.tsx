@@ -1,9 +1,14 @@
+import { useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
 import { useConversationStore } from "#/stores/conversation-store";
 import { I18nKey } from "#/i18n/declaration";
 import { cn } from "#/utils/utils";
+import { mobileTopBarIconButtonClassName } from "#/utils/mobile-top-bar-icon-button-classes";
 import BlockDrawerLeftIcon from "#/icons/block-drawer-left.svg?react";
 import { ChatActionTooltip } from "../chat/chat-action-tooltip";
+import { useBreakpoint } from "#/hooks/use-breakpoint";
+import { useConversationId } from "#/hooks/use-conversation-id";
+import { useIsArchivedConversation } from "#/hooks/use-is-archived-conversation";
 
 interface RightPanelToggleProps {
   className?: string;
@@ -19,10 +24,34 @@ interface RightPanelToggleProps {
  */
 export function RightPanelToggle({ className }: RightPanelToggleProps) {
   const { t } = useTranslation("openhands");
-  const { isRightPanelShown, setHasRightPanelToggled, setSelectedTab } =
-    useConversationStore();
+  const isMobile = useBreakpoint();
+  const isArchivedConversation = useIsArchivedConversation();
+  const navigate = useNavigate();
+  const { conversationId } = useConversationId();
+  const {
+    isRightPanelShown,
+    setHasRightPanelToggled,
+    setIsRightPanelShown,
+    setSelectedTab,
+  } = useConversationStore();
 
   const handleToggle = () => {
+    if (isArchivedConversation) {
+      return;
+    }
+
+    if (isMobile) {
+      if (!conversationId) return;
+      setHasRightPanelToggled(true);
+      setIsRightPanelShown(true);
+      const { selectedTab } = useConversationStore.getState();
+      if (!selectedTab) {
+        setSelectedTab("files");
+      }
+      navigate(`/conversations/${conversationId}/panel`);
+      return;
+    }
+
     const newState = !isRightPanelShown;
     setHasRightPanelToggled(newState);
 
@@ -34,24 +63,34 @@ export function RightPanelToggle({ className }: RightPanelToggleProps) {
     }
   };
 
-  const tooltipText = isRightPanelShown
-    ? t(I18nKey.COMMON$HIDE_PANEL)
-    : t(I18nKey.COMMON$SHOW_PANEL);
+  const tooltipText = isArchivedConversation
+    ? t(I18nKey.CONVERSATION$UNAVAILABLE_FOR_ARCHIVES)
+    : isMobile
+      ? t(I18nKey.COMMON$SHOW_PANEL)
+      : isRightPanelShown
+        ? t(I18nKey.COMMON$HIDE_PANEL)
+        : t(I18nKey.COMMON$SHOW_PANEL);
+
+  const ariaPressed = isMobile ? false : isRightPanelShown;
 
   return (
     <ChatActionTooltip tooltip={tooltipText} ariaLabel={tooltipText}>
       <button
         type="button"
         onClick={handleToggle}
+        disabled={isArchivedConversation}
         className={cn(
-          "p-1 rounded-md cursor-pointer transition-colors text-[var(--oh-muted)] hover:bg-white/10 hover:text-white",
+          mobileTopBarIconButtonClassName,
+          isArchivedConversation &&
+            "cursor-not-allowed opacity-50 hover:bg-transparent hover:text-[var(--oh-muted)]",
           className,
         )}
         aria-label={tooltipText}
-        aria-pressed={isRightPanelShown}
+        aria-pressed={ariaPressed}
+        aria-disabled={isArchivedConversation}
         data-testid="right-panel-toggle"
       >
-        <BlockDrawerLeftIcon className="w-5 h-5" />
+        <BlockDrawerLeftIcon className="w-5 h-5 -scale-x-100" />
       </button>
     </ChatActionTooltip>
   );

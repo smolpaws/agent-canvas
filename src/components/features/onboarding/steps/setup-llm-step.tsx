@@ -15,15 +15,13 @@ interface SetupLlmStepProps {
 }
 
 /**
- * Pre-fills the LLM form with Anthropic / Claude Opus when the user
- * lands on this onboarding step. The global `DEFAULT_SETTINGS` ships
- * the OpenHands-prefixed Opus, but the onboarding spec calls for
- * routing directly through Anthropic, and these overrides are also
- * marked dirty so the Next button is enabled immediately.
+ * Pre-fills the LLM form with the OpenAI GPT-5.5 model. The SDK's
+ * bare default model is `gpt-5.5`; Canvas stores provider-qualified
+ * LiteLLM model ids, so the onboarding override uses this OpenAI-prefixed
+ * model id. Keeping this as an explicit override marks the model dirty so
+ * the Next button persists the suggested default immediately.
  */
-const ONBOARDING_LLM_OVERRIDES = {
-  "llm.model": "anthropic/claude-opus-4-7",
-} as const;
+export const ONBOARDING_DEFAULT_LLM_MODEL = "openai/gpt-5.5";
 
 /**
  * Step 2: embed the LLM settings form. The screen runs in `embedded`
@@ -36,6 +34,11 @@ const ONBOARDING_LLM_OVERRIDES = {
  * If the form happens to be untouched (no dirty fields), Next falls
  * through to advancing without a save call, so users with already-
  * configured settings aren't blocked.
+ *
+ * Note: returning Cloud users who already have an LLM configured are
+ * intercepted upstream by `OnboardingHost`, so they never reach this
+ * step. Users who do reach it are first-time installs (Cloud or Local)
+ * who want the OpenAI/GPT-5.5 default pre-filled.
  */
 export function SetupLlmStep({ onBack, onNext }: SetupLlmStepProps) {
   const { t } = useTranslation("openhands");
@@ -107,7 +110,7 @@ export function SetupLlmStep({ onBack, onNext }: SetupLlmStepProps) {
       className="flex flex-col gap-6 max-h-[calc(90vh-7rem)]"
     >
       <header className="flex flex-col gap-2">
-        <h2 className="text-2xl font-semibold text-white">
+        <h2 className="text-2xl font-medium text-white">
           {t(I18nKey.ONBOARDING$LLM_TITLE)}
         </h2>
         <p className="text-sm text-[var(--oh-muted)]">
@@ -122,13 +125,16 @@ export function SetupLlmStep({ onBack, onNext }: SetupLlmStepProps) {
         <LlmSettingsScreen
           embedded
           hideSaveButton
-          initialValueOverrides={ONBOARDING_LLM_OVERRIDES}
+          suppressSuccessToast
+          initialValueOverrides={{
+            "llm.model": ONBOARDING_DEFAULT_LLM_MODEL,
+          }}
           onSaveSuccess={handleSaveSuccess}
           onSaveControlChange={setSaveControl}
         />
       </div>
 
-      <div className="sticky bottom-0 flex items-center justify-end gap-2 bg-base-secondary pt-4 pb-7">
+      <div className="sticky bottom-0 flex items-center justify-between gap-2 bg-base-secondary pt-4 pb-7">
         <BrandButton
           testId="onboarding-llm-back"
           type="button"

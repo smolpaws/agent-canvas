@@ -7,6 +7,7 @@ import type { ViewMode } from "#/components/features/files-tab/view-mode";
 
 export const LOCAL_STORAGE_KEYS = {
   CONVERSATION_STATE: "conversation-state",
+  PENDING_TASK_DRAFT: "pending-task-draft",
 } as const;
 
 const CONVERSATION_STATE_UPDATED_EVENT = "conversation-state-updated";
@@ -57,7 +58,6 @@ const DEFAULT_CONVERSATION_STATE: ConversationState = {
 const VALID_CONVERSATION_TABS: ReadonlySet<ConversationTab> = new Set([
   "files",
   "browser",
-  "vscode",
   "terminal",
   "planner",
   "tasklist",
@@ -77,6 +77,7 @@ const REMOVED_CONVERSATION_TABS: ReadonlySet<string> = new Set([
   "served",
   "changes",
   "app",
+  "vscode",
 ]);
 
 const VALID_VIEW_MODES: ReadonlySet<ViewMode> = new Set(["rich", "plain"]);
@@ -197,6 +198,37 @@ export function setConversationState(
     }
   } catch (err) {
     console.warn("Failed to set conversation localStorage", err);
+  }
+}
+
+function getPendingTaskDraftKey(taskId: string): string {
+  return `${LOCAL_STORAGE_KEYS.PENDING_TASK_DRAFT}-${taskId}`;
+}
+
+export function setPendingTaskDraft(
+  taskId: string | null | undefined,
+  draftMessage: string,
+): void {
+  if (!taskId) return;
+  try {
+    localStorage.setItem(getPendingTaskDraftKey(taskId), draftMessage);
+  } catch (err) {
+    console.warn("Failed to store pending task draft", err);
+  }
+}
+
+export function consumePendingTaskDraft(
+  taskId: string | null | undefined,
+): string | null {
+  if (!taskId) return null;
+  try {
+    const key = getPendingTaskDraftKey(taskId);
+    const draft = localStorage.getItem(key);
+    localStorage.removeItem(key);
+    return draft;
+  } catch (err) {
+    console.warn("Failed to consume pending task draft", err);
+    return null;
   }
 }
 

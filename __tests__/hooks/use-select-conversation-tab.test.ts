@@ -6,6 +6,7 @@ import { useConversationStore } from "#/stores/conversation-store";
 const TEST_CONVERSATION_ID = "test-conversation-id";
 
 vi.mock("#/hooks/use-conversation-id", () => ({
+  useOptionalConversationId: () => ({ conversationId: "test-conversation-id" }),
   useConversationId: () => ({ conversationId: TEST_CONVERSATION_ID }),
 }));
 
@@ -212,7 +213,7 @@ describe("useSelectConversationTab", () => {
     it("should return current selectedTab from store", () => {
       // Arrange
       useConversationStore.setState({
-        selectedTab: "vscode",
+        selectedTab: "browser",
         isRightPanelShown: true,
         hasRightPanelToggled: true,
       });
@@ -220,7 +221,7 @@ describe("useSelectConversationTab", () => {
       const { result } = renderHook(() => useSelectConversationTab());
 
       // Assert: Should return current selectedTab
-      expect(result.current.selectedTab).toBe("vscode");
+      expect(result.current.selectedTab).toBe("browser");
     });
 
     it("should return current isRightPanelShown from store", () => {

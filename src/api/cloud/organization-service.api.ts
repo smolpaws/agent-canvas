@@ -38,8 +38,7 @@ function resolveBackend(backend?: Backend): Backend {
  * cloud backend; pass `backend` explicitly to fetch for an inactive cloud
  * (used by the selector to flatten all cloud rows).
  *
- * Routed through the bundled agent-server's `/api/cloud-proxy` to avoid
- * cross-origin browser calls.
+ * Calls the cloud API directly with the backend's bearer token.
  */
 export async function getCloudOrganizations(
   backend?: Backend,
@@ -56,7 +55,7 @@ export async function getCloudOrganizations(
 /**
  * Fetch metadata for the API key used to authenticate this cloud backend.
  * The returned `orgId` is the single org the key is authorized to act on
- * (the SaaS contract: one key → one org).
+ * (the cloud contract: one key → one org).
  *
  * Legacy keys minted before per-key org binding existed cause the upstream
  * to return HTTP 400 — we surface that as `isLegacyKey: true` with a null
@@ -86,7 +85,7 @@ export async function getCurrentCloudApiKey(
 /**
  * Fetch `GET /api/organizations/{orgId}/me`. Identifies the calling user as
  * a member of `orgId`. The GUI uses `me.org_id === me.user_id` to decide
- * whether `orgId` is the user's personal workspace — that's the SaaS
+ * whether `orgId` is the user's personal workspace — that's the cloud
  * contract (the auto-generated personal-workspace org has the same id as
  * the user).
  */

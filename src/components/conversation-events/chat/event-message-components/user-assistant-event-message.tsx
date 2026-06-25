@@ -4,6 +4,9 @@ import { ChatMessage } from "../../../features/chat/chat-message";
 import { ImageCarousel } from "../../../features/images/image-carousel";
 import { ConversationConfirmationButtons } from "#/components/shared/buttons/conversation-confirmation-buttons";
 import { parseMessageFromEvent } from "../event-content-helpers/parse-message-from-event";
+import { CriticResultDisplay } from "./critic-result-display";
+import { CollapsibleThinking } from "./collapsible-thinking";
+import { splitInlineThink } from "../event-thought-helpers";
 
 interface UserAssistantEventMessageProps {
   event: MessageEvent;
@@ -16,7 +19,13 @@ export function UserAssistantEventMessage({
   isLastMessage,
   isFromPlanningAgent,
 }: UserAssistantEventMessageProps) {
-  const message = parseMessageFromEvent(event);
+  const parsed = parseMessageFromEvent(event);
+  // Route an inline <think> block (e.g. from a streamed reply) to the thinking
+  // section so reloaded conversations match the live rendering.
+  const { reasoning, message } =
+    event.source === "agent"
+      ? splitInlineThink(parsed)
+      : { reasoning: "", message: parsed };
 
   const imageUrls: string[] = [];
   if (Array.isArray(event.llm_message.content)) {
@@ -28,15 +37,21 @@ export function UserAssistantEventMessage({
   }
 
   return (
-    <ChatMessage
-      type={event.source}
-      message={message}
-      isFromPlanningAgent={isFromPlanningAgent}
-    >
-      {imageUrls.length > 0 && (
-        <ImageCarousel size="small" images={imageUrls} />
+    <>
+      {reasoning && <CollapsibleThinking content={reasoning} />}
+      <ChatMessage
+        type={event.source}
+        message={message}
+        isFromPlanningAgent={isFromPlanningAgent}
+      >
+        {imageUrls.length > 0 && (
+          <ImageCarousel size="small" images={imageUrls} />
+        )}
+        {isLastMessage && <ConversationConfirmationButtons />}
+      </ChatMessage>
+      {event.source === "agent" && event.critic_result != null && (
+        <CriticResultDisplay criticResult={event.critic_result} />
       )}
-      {isLastMessage && <ConversationConfirmationButtons />}
-    </ChatMessage>
+    </>
   );
 }

@@ -20,6 +20,7 @@ const REAL_CONVERSATION_ID = "conv-abc123";
 let mockConversationId = TASK_CONVERSATION_ID;
 
 vi.mock("#/hooks/use-conversation-id", () => ({
+  useOptionalConversationId: () => ({ conversationId: "test-conversation-id" }),
   useConversationId: () => ({ conversationId: mockConversationId }),
 }));
 
@@ -51,6 +52,14 @@ vi.mock("#/hooks/use-handle-build-plan-click", () => ({
 let mockCurAgentState = AgentState.AWAITING_USER_INPUT;
 vi.mock("#/hooks/use-agent-state", () => ({
   useAgentState: () => ({ curAgentState: mockCurAgentState }),
+}));
+
+vi.mock("#/hooks/query/use-unified-vscode-url", () => ({
+  useUnifiedVSCodeUrl: () => ({
+    data: { url: "http://localhost:8001", error: null },
+    isLoading: false,
+    refetch: vi.fn().mockResolvedValue({ data: { url: "http://localhost:8001" } }),
+  }),
 }));
 
 const createWrapper = (conversationId: string) =>
@@ -314,6 +323,15 @@ describe("ConversationTabs localStorage behavior", () => {
 
     it("shows an unpinned tab in the bar while it is selected", () => {
       mockConversationId = REAL_CONVERSATION_ID;
+      // Planner is cloud-only, so a cloud backend is required to exercise
+      // the unpinned-while-selected logic against the planner tab.
+      seedActiveBackend({
+        id: "cloud-test",
+        name: "Cloud Test",
+        host: "https://app.example.com",
+        apiKey: "secret",
+        kind: "cloud",
+      });
       seedConversationState(REAL_CONVERSATION_ID, {
         selectedTab: "planner",
         unpinnedTabs: ["planner"],
@@ -335,6 +353,15 @@ describe("ConversationTabs localStorage behavior", () => {
 
     it("hides an unpinned tab from the bar once another tab is selected", () => {
       mockConversationId = REAL_CONVERSATION_ID;
+      // Cloud backend so the planner tab would be eligible — it stays
+      // hidden here because it is unpinned and not the selected tab.
+      seedActiveBackend({
+        id: "cloud-test",
+        name: "Cloud Test",
+        host: "https://app.example.com",
+        apiKey: "secret",
+        kind: "cloud",
+      });
       seedConversationState(REAL_CONVERSATION_ID, {
         selectedTab: "files",
         unpinnedTabs: ["planner"],
@@ -430,12 +457,12 @@ describe("ConversationTabs localStorage behavior", () => {
     });
   });
 
-  describe("vscode tab visibility by backend kind", () => {
+  describe("planner tab visibility by backend kind", () => {
     beforeEach(() => {
       mockConversationId = REAL_CONVERSATION_ID;
     });
 
-    it("should hide the vscode tab when the active backend is local", () => {
+    it("should hide the planner tab when the active backend is local", () => {
       // Arrange
       seedActiveBackend({
         id: "local-test",
@@ -452,11 +479,11 @@ describe("ConversationTabs localStorage behavior", () => {
 
       // Assert
       expect(
-        screen.queryByTestId("conversation-tab-vscode"),
+        screen.queryByTestId("conversation-tab-planner"),
       ).not.toBeInTheDocument();
     });
 
-    it("should show the vscode tab when the active backend is cloud", () => {
+    it("should show the planner tab when the active backend is cloud", () => {
       // Arrange
       seedActiveBackend({
         id: "cloud-test",
@@ -472,7 +499,79 @@ describe("ConversationTabs localStorage behavior", () => {
       });
 
       // Assert
-      expect(screen.getByTestId("conversation-tab-vscode")).toBeInTheDocument();
+      expect(
+        screen.getByTestId("conversation-tab-planner"),
+      ).toBeInTheDocument();
+    });
+  });
+
+  describe("vscode link visibility by backend kind", () => {
+    beforeEach(() => {
+      mockConversationId = REAL_CONVERSATION_ID;
+    });
+
+    it("should hide the vscode link when the active backend is local", () => {
+      // Arrange
+      seedActiveBackend({
+        id: "local-test",
+        name: "Local Test",
+        host: "http://localhost:8000",
+        apiKey: "",
+        kind: "local",
+      });
+
+      // Act
+      render(<ConversationTabs />, {
+        wrapper: createWrapper(REAL_CONVERSATION_ID),
+      });
+
+      // Assert
+      expect(
+        screen.queryByTestId("drawer-vscode-link"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("should show the vscode link when the active backend is cloud", () => {
+      // Arrange
+      seedActiveBackend({
+        id: "cloud-test",
+        name: "Cloud Test",
+        host: "https://app.example.com",
+        apiKey: "secret",
+        kind: "cloud",
+      });
+
+      // Act
+      render(<ConversationTabs />, {
+        wrapper: createWrapper(REAL_CONVERSATION_ID),
+      });
+
+      // Assert
+      expect(screen.getByTestId("drawer-vscode-link")).toBeInTheDocument();
+    });
+  });
+
+  describe("ellipsis context menu", () => {
+    beforeEach(() => {
+      mockConversationId = REAL_CONVERSATION_ID;
+    });
+
+    it("opens the context menu when the ellipsis button is clicked", async () => {
+      const user = userEvent.setup();
+
+      render(<ConversationTabs />, {
+        wrapper: createWrapper(REAL_CONVERSATION_ID),
+      });
+
+      expect(
+        screen.queryByTestId("conversation-tabs-menu-open-files"),
+      ).not.toBeInTheDocument();
+
+      await user.click(screen.getByTestId("ellipsis-button"));
+
+      expect(
+        screen.getByTestId("conversation-tabs-menu-open-files"),
+      ).toBeInTheDocument();
     });
   });
 

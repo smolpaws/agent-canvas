@@ -15,8 +15,10 @@ export type ProviderToken = {
 };
 
 export type MCPSSEServer = {
+  name?: string;
   url: string;
   api_key?: string;
+  headers?: Record<string, string>;
 };
 
 export type MCPStdioServer = {
@@ -27,8 +29,10 @@ export type MCPStdioServer = {
 };
 
 export type MCPSHTTPServer = {
+  name?: string;
   url: string;
   api_key?: string;
+  headers?: Record<string, string>;
   timeout?: number;
 };
 
@@ -109,13 +113,35 @@ export type SkillInfo = {
 
 export type SettingsScope = "personal";
 
+/**
+ * Agent kind stored on ``Settings.agent_settings.agent_kind``.
+ *
+ * - ``"openhands"`` (default): the conversation runs through OpenHands' built-in
+ *   LLM-driven Agent. The other agent_settings fields (``llm``, ``condenser``,
+ *   ``mcp_config``, ``tools``) apply.
+ * - ``"acp"``: the conversation is driven by an external ACP subprocess
+ *   (Claude Code / Codex / Gemini CLI / Custom). The LLM / condenser / MCP
+ *   settings are inert; ``acp_command`` / ``acp_args`` / ``acp_model`` /
+ *   ``acp_server`` apply instead. Provider credentials are supplied through the
+ *   Secrets panel (``request.secrets``), never through a per-agent env channel.
+ */
+export type AgentKind = "openhands" | "acp";
+
 export type Settings = {
   llm_model: string;
   llm_base_url: string;
   agent: string;
   language: string;
   llm_api_key: string | null;
+  /** Cloud-shape "an LLM key is on file for this user". */
   llm_api_key_set: boolean;
+  /**
+   * Agent-server-shape "an LLM key is on file". The local agent-server
+   * uses `_is_set` in its `/api/settings` payload; Cloud uses `_set`.
+   * Surfacing both so onboarding-skip logic can treat the two backends
+   * uniformly.
+   */
+  llm_api_key_is_set?: boolean;
   search_api_key_set: boolean;
   confirmation_mode: boolean;
   security_analyzer: string | null;

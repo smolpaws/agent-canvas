@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useCombobox } from "downshift";
 import { cn } from "#/utils/utils";
 import { DropdownOption } from "./types";
+import { dropdownTriggerShellClassName } from "#/utils/dropdown-classes";
 import { LoadingSpinner } from "./loading-spinner";
 import { ClearButton } from "./clear-button";
 import { ToggleButton } from "./toggle-button";
@@ -39,6 +40,10 @@ interface DropdownProps {
   defaultOpen?: boolean;
   /** Open the dropdown menu on hover instead of requiring a click. */
   openOnHover?: boolean;
+  /** When false, the combobox placeholder uses normal (non-italic) type. */
+  italicPlaceholder?: boolean;
+  /** Size the trigger to its label instead of stretching to the container width. */
+  fitContent?: boolean;
 }
 
 export function Dropdown({
@@ -57,12 +62,24 @@ export function Dropdown({
   hideTrigger = false,
   defaultOpen = false,
   openOnHover = false,
+  italicPlaceholder = true,
+  fitContent = false,
 }: DropdownProps) {
   const closeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
   const [inputValue, setInputValue] = useState(defaultValue?.label ?? "");
   const [searchTerm, setSearchTerm] = useState("");
+
+  React.useEffect(
+    () => () => {
+      if (closeTimerRef.current) {
+        clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+      }
+    },
+    [],
+  );
 
   const filteredOptions = options.filter((option) =>
     option.label.toLowerCase().includes(searchTerm.toLowerCase()),
@@ -140,7 +157,7 @@ export function Dropdown({
 
   return (
     <div
-      className="relative w-full"
+      className={cn("relative", fitContent ? "inline-block w-auto" : "w-full")}
       data-testid={testId}
       onMouseEnter={
         openOnHover
@@ -156,6 +173,9 @@ export function Dropdown({
       onMouseLeave={
         openOnHover
           ? () => {
+              if (closeTimerRef.current) {
+                clearTimeout(closeTimerRef.current);
+              }
               closeTimerRef.current = setTimeout(() => closeMenu(), 150);
             }
           : undefined
@@ -164,8 +184,8 @@ export function Dropdown({
       {!hideTrigger ? (
         <div
           className={cn(
-            "bg-tertiary border border-[var(--oh-border-input)] rounded w-full p-2",
-            "flex items-center gap-2",
+            dropdownTriggerShellClassName,
+            fitContent ? "w-auto" : "w-full",
             isDisabled && "cursor-not-allowed opacity-60",
             className,
           )}
@@ -179,6 +199,8 @@ export function Dropdown({
             placeholder={placeholder}
             isDisabled={isDisabled}
             getInputProps={getInputPropsWithCursorFix}
+            italicPlaceholder={italicPlaceholder}
+            fitContent={fitContent}
           />
           {loading && <LoadingSpinner />}
           {clearable && selectedItem && (
@@ -199,6 +221,7 @@ export function Dropdown({
         <>
           <input
             {...getInputPropsWithCursorFix({
+              // eslint-disable-next-line i18next/no-literal-string -- i18n-free UI primitive; callers supply translated labels
               "aria-label": placeholder ?? "Filter options",
               tabIndex: -1,
             })}
@@ -221,6 +244,7 @@ export function Dropdown({
         getItemProps={getItemProps}
         footer={footer}
         openUpward={openUpward}
+        fitContent={fitContent}
       />
     </div>
   );

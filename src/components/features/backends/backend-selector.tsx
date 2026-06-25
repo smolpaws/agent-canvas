@@ -4,6 +4,7 @@ import { useMatch, useNavigate } from "react-router";
 import { Plus, Settings } from "lucide-react";
 import { Dropdown } from "#/ui/dropdown/dropdown";
 import { DropdownOption } from "#/ui/dropdown/types";
+import { isNoBackend } from "#/api/backend-registry/active-store";
 import { useActiveBackendContext } from "#/contexts/active-backend-context";
 import { useAllCloudOrganizations } from "#/hooks/query/use-cloud-organizations";
 import { useCloudCurrentUserId } from "#/hooks/query/use-cloud-current-user-id";
@@ -21,9 +22,19 @@ import {
   ENVIRONMENT_SWITCH_SETACTIVE_DELAY_MS,
   triggerEnvironmentSwitch,
 } from "#/components/features/backends/environment-switch-store";
+import { NavigationLink } from "#/components/shared/navigation-link";
+import { StyledTooltip } from "#/components/shared/buttons/styled-tooltip";
+import { useConversationStore } from "#/stores/conversation-store";
 import { AddBackendModal } from "./add-backend-modal";
 import { BackendStatusDot } from "./backend-status-dot";
 import { ManageBackendsModal } from "./manage-backends-modal";
+import { cn } from "#/utils/utils";
+import { formControlTransitionClassName } from "#/utils/form-control-classes";
+import {
+  dropdownFooterActionClassName,
+  dropdownMenuListClassName,
+  dropdownMenuRowIconWrapperClassName,
+} from "#/utils/dropdown-classes";
 
 const VALUE_SEPARATOR = "::";
 
@@ -41,6 +52,10 @@ function parseOptionValue(value: string): {
 
 function buildStatusPrefix(health: BackendHealth | undefined) {
   return <BackendStatusDot isConnected={health?.isConnected ?? null} />;
+}
+
+function buildNoBackendPrefix() {
+  return <BackendStatusDot isConnected="unavailable" />;
 }
 
 function buildOptions(
@@ -73,7 +88,7 @@ function buildOptions(
         prefix,
       });
     } else {
-      // Personal-workspace rule (per the SaaS contract): the org whose
+      // Personal-workspace rule (per the cloud contract): the org whose
       // id matches the calling user's id is the user's personal
       // workspace. We resolve `user_id` once per backend (via /me on any
       // one org) and apply it across all orgs of that backend.
@@ -115,6 +130,12 @@ interface BackendSelectorProps {
   onOpenAddBackend?: () => void;
   /** Same as onOpenAddBackend but for the Manage Backends modal. */
   onOpenManageBackends?: () => void;
+  /**
+   * Whether the surrounding sidebar rail is in its collapsed variant. Passed
+   * down from `SidebarRailBody` so the mobile drawer (which always renders
+   * the expanded rail) can override the persisted desktop value.
+   */
+  sidebarCollapsed?: boolean;
 }
 
 export function BackendSelector({
@@ -124,6 +145,7 @@ export function BackendSelector({
   onSelectOption,
   onOpenAddBackend,
   onOpenManageBackends,
+  sidebarCollapsed = false,
 }: BackendSelectorProps = {}) {
   const { t } = useTranslation("openhands");
   const { backends, active, setActive } = useActiveBackendContext();
@@ -160,9 +182,24 @@ export function BackendSelector({
     ],
   );
 
+  const noBackendSelected = isNoBackend(active.backend);
+  const noBackendLabel = t(I18nKey.BACKEND$NO_BACKEND_AVAILABLE);
   const activeValue = makeOptionValue(active.backend.id, active.orgId);
-  const activeOption = options.find((o) => o.value === activeValue);
+  const activeOption = noBackendSelected
+    ? undefined
+    : options.find((o) => o.value === activeValue);
   const isSettingsActive = Boolean(settingsMatch || settingsSubrouteMatch);
+  const settingsLabel = t(I18nKey.SIDEBAR$SETTINGS);
+  const isRightPanelShown = useConversationStore(
+    (state) => state.isRightPanelShown,
+  );
+  // When the sidebar rail is expanded, `placement="left"` hugs the main
+  // canvas and reads awkwardly; prefer above the control. When the rail is
+  // collapsed, keep left except on active conversation + open right drawer.
+  const settingsTooltipPlacement =
+    !sidebarCollapsed || (conversationMatch && isRightPanelShown)
+      ? "top"
+      : "left";
 
   const someCloudLoading = Object.values(cloudOrgs).some((c) => c.isLoading);
 
@@ -174,11 +211,12 @@ export function BackendSelector({
   // (UI says "Local", APIs hit cloud). When we detect the drift, snap
   // the selection onto the personal-workspace org (or, lacking a /me
   // result, the first org). The selection is recorded locally only;
-  // the SaaS request scope follows from the API key's bound org and the
+  // the cloud request scope follows from the API key's bound org and the
   // X-Org-Id header sent by `callCloudProxy`, so the cloud UI's
   // org choice is never mutated as a side effect.
   React.useEffect(() => {
-    if (active.backend.kind !== "cloud" || active.orgId) return;
+    if (noBackendSelected || active.backend.kind !== "cloud" || active.orgId)
+      return;
     const { backend } = active;
     const entry = cloudOrgs[backend.id];
     if (!entry || entry.orgs.length === 0) return;
@@ -191,7 +229,7 @@ export function BackendSelector({
     if (target) {
       setActive(backend.id, target.id);
     }
-  }, [active, cloudOrgs, currentUserIds, setActive]);
+  }, [active, cloudOrgs, currentUserIds, setActive, noBackendSelected]);
 
   const openAddBackendModal = React.useCallback(() => {
     if (onOpenAddBackend) {
@@ -212,33 +250,79 @@ export function BackendSelector({
   }, [onOpenManageBackends, onSelectOption]);
 
   const preventDropdownMenuClose = React.useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
+    (event: React.SyntheticEvent<HTMLButtonElement>) => {
       event.preventDefault();
       event.stopPropagation();
     },
     [],
   );
 
+  const handleAddBackendClick = React.useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      preventDropdownMenuClose(event);
+      openAddBackendModal();
+    },
+    [openAddBackendModal, preventDropdownMenuClose],
+  );
+
+  const handleAddBackendTouchEnd = React.useCallback(
+    (event: React.TouchEvent<HTMLButtonElement>) => {
+      preventDropdownMenuClose(event);
+      openAddBackendModal();
+    },
+    [openAddBackendModal, preventDropdownMenuClose],
+  );
+
+  const handleManageBackendsClick = React.useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      preventDropdownMenuClose(event);
+      openManageBackendsModal();
+    },
+    [openManageBackendsModal, preventDropdownMenuClose],
+  );
+
+  const handleManageBackendsTouchEnd = React.useCallback(
+    (event: React.TouchEvent<HTMLButtonElement>) => {
+      preventDropdownMenuClose(event);
+      openManageBackendsModal();
+    },
+    [openManageBackendsModal, preventDropdownMenuClose],
+  );
+
   const addBackendFooter = (
-    <div className="flex flex-col gap-1">
+    <div className={dropdownMenuListClassName}>
       <button
         type="button"
         data-testid="add-backend-menu-item"
         onMouseDown={preventDropdownMenuClose}
-        onClick={openAddBackendModal}
-        className="flex w-full items-center gap-2 px-2 py-2 rounded-md text-sm cursor-pointer text-white hover:bg-[var(--oh-interactive-hover)]"
+        onTouchStart={preventDropdownMenuClose}
+        onTouchEnd={handleAddBackendTouchEnd}
+        onClick={handleAddBackendClick}
+        className={cn(
+          dropdownFooterActionClassName,
+          "cursor-pointer rounded-md",
+        )}
       >
-        <Plus width={16} height={16} className="text-white shrink-0" />
+        <span className={dropdownMenuRowIconWrapperClassName} aria-hidden>
+          <Plus width={16} height={16} />
+        </span>
         {t(I18nKey.BACKEND$ADD)}
       </button>
       <button
         type="button"
         data-testid="manage-backends-menu-item"
         onMouseDown={preventDropdownMenuClose}
-        onClick={openManageBackendsModal}
-        className="flex w-full items-center gap-2 px-2 py-2 rounded-md text-sm cursor-pointer text-white hover:bg-[var(--oh-interactive-hover)]"
+        onTouchStart={preventDropdownMenuClose}
+        onTouchEnd={handleManageBackendsTouchEnd}
+        onClick={handleManageBackendsClick}
+        className={cn(
+          dropdownFooterActionClassName,
+          "cursor-pointer rounded-md",
+        )}
       >
-        <Settings width={16} height={16} className="text-white shrink-0" />
+        <span className={dropdownMenuRowIconWrapperClassName} aria-hidden>
+          <Settings width={16} height={16} />
+        </span>
         {t(I18nKey.BACKEND$MANAGE)}
       </button>
     </div>
@@ -259,6 +343,7 @@ export function BackendSelector({
         setTimeout(resolve, ENVIRONMENT_SWITCH_SETACTIVE_DELAY_MS);
       });
 
+      // @spec BM-002 — Switching backends keeps the user on the same page
       if (conversationMatch) navigate("/conversations");
       else if (automationDetailMatch) navigate("/automations");
 
@@ -288,8 +373,10 @@ export function BackendSelector({
             defaultValue={
               activeOption ?? {
                 value: activeValue,
-                label: active.backend.name,
-                prefix: buildStatusPrefix(healthByBackendId[active.backend.id]),
+                label: noBackendSelected ? noBackendLabel : active.backend.name,
+                prefix: noBackendSelected
+                  ? buildNoBackendPrefix()
+                  : buildStatusPrefix(healthByBackendId[active.backend.id]),
               }
             }
             footer={addBackendFooter}
@@ -301,26 +388,40 @@ export function BackendSelector({
               if (!item) return;
               void handleSelectBackend(item.value);
             }}
-            placeholder={active.backend.name}
+            placeholder={
+              noBackendSelected ? noBackendLabel : active.backend.name
+            }
             loading={someCloudLoading}
             options={options}
-            className="bg-transparent border-transparent hover:bg-[var(--oh-surface-raised)] focus-within:bg-[var(--oh-surface-raised)]"
+            className="h-10 px-2 py-0 bg-transparent border-transparent hover:bg-[var(--oh-surface-raised)] focus-within:bg-[var(--oh-surface-raised)] focus-within:border-transparent focus-within:ring-0"
           />
         </div>
         {!hideTrigger ? (
-          <button
-            type="button"
-            data-testid="backend-selector-settings-link"
-            aria-label={t(I18nKey.SIDEBAR$SETTINGS)}
-            onClick={() => navigate("/settings")}
-            className={
-              isSettingsActive
-                ? "inline-flex items-center justify-center shrink-0 w-9 h-9 rounded-md bg-tertiary text-white font-medium transition-colors cursor-pointer"
-                : "inline-flex items-center justify-center shrink-0 w-9 h-9 rounded-md text-[var(--oh-muted)] hover:text-white hover:bg-[var(--oh-surface-raised)] transition-colors cursor-pointer"
-            }
+          <StyledTooltip
+            content={settingsLabel}
+            placement={settingsTooltipPlacement}
+            offset={10}
           >
-            <Settings width={16} height={16} />
-          </button>
+            <NavigationLink
+              to="/settings"
+              data-testid="backend-selector-settings-link"
+              data-active={isSettingsActive}
+              aria-label={settingsLabel}
+              className={
+                isSettingsActive
+                  ? cn(
+                      "inline-flex items-center justify-center shrink-0 w-9 h-9 rounded-md bg-tertiary text-white font-normal cursor-pointer",
+                      formControlTransitionClassName,
+                    )
+                  : cn(
+                      "inline-flex items-center justify-center shrink-0 w-9 h-9 rounded-md text-[var(--oh-muted)] hover:text-white hover:bg-[var(--oh-surface-raised)] cursor-pointer",
+                      formControlTransitionClassName,
+                    )
+              }
+            >
+              <Settings width={16} height={16} />
+            </NavigationLink>
+          </StyledTooltip>
         ) : null}
       </div>
       {addBackendModalOpen ? (

@@ -38,6 +38,9 @@ vi.mock("react-i18next", async () => {
           CONVERSATION$AGO: "ago",
           CONVERSATION$UPDATED: "Updated",
           COMMON$NO_REPOSITORY: "No repository",
+          CONVERSATION$ACP_AGENT_GENERIC: "ACP",
+          CONVERSATION_PANEL$PIN_CONVERSATION: "Pin conversation",
+          CONVERSATION_PANEL$UNPIN_CONVERSATION: "Unpin conversation",
         };
         return translations[key] || key;
       },
@@ -47,6 +50,12 @@ vi.mock("react-i18next", async () => {
     }),
   };
 });
+
+vi.mock("#/hooks/use-tracking", () => ({
+  useTracking: () => ({
+    trackDownloadVsCodeButtonClicked: vi.fn(),
+  }),
+}));
 
 describe("ConversationCard", () => {
   const onClick = vi.fn();
@@ -185,14 +194,12 @@ describe("ConversationCard", () => {
       />,
     );
 
-    // Context menu is always in the DOM but hidden by CSS classes when contextMenuOpen is false
-    const contextMenu = screen.queryByTestId("context-menu");
-    if (contextMenu) {
-      const contextMenuParent = contextMenu.parentElement;
-      if (contextMenuParent) {
-        expect(contextMenuParent).toHaveClass("opacity-0", "invisible");
-      }
-    }
+    // The closed state is observable via the `data-context-menu-open` attr
+    // on the conversation-card root; visual hiding is a CSS consequence.
+    expect(screen.getByTestId("conversation-card")).toHaveAttribute(
+      "data-context-menu-open",
+      "false",
+    );
 
     const ellipsisButton = screen.getByTestId("ellipsis-button");
     await user.click(ellipsisButton);
@@ -303,14 +310,11 @@ describe("ConversationCard", () => {
     const title = screen.getByTestId("conversation-card-title");
 
     expect(title).toBeEnabled();
-    // Context menu should be hidden after edit button is clicked (check CSS classes on parent div)
-    const contextMenu = screen.queryByTestId("context-menu");
-    if (contextMenu) {
-      const contextMenuParent = contextMenu.parentElement;
-      if (contextMenuParent) {
-        expect(contextMenuParent).toHaveClass("opacity-0", "invisible");
-      }
-    }
+    // Context menu should be closed after edit button is clicked.
+    expect(screen.getByTestId("conversation-card")).toHaveAttribute(
+      "data-context-menu-open",
+      "false",
+    );
     // expect to be focused
     expect(document.activeElement).toBe(title);
 
@@ -598,5 +602,249 @@ describe("ConversationCard", () => {
         "COMMON$CLOSE_CONVERSATION_STOP_RUNTIME",
       );
     });
+  });
+
+  describe("Agent chip", () => {
+    // The agent chip is gated by the conversation panel's "Agent / model"
+    // toggle (``showLlmProfiles``), off by default — one control for both ACP and
+    // OpenHands cards. The renders below pass ``showLlmProfiles`` to exercise
+    // the chip; the gating itself is covered by the first two tests.
+    it("hides the chip by default (LLM-model toggle off) for ACP", () => {
+      renderWithProviders(
+        <ConversationCard
+          title="Conversation 1"
+          selectedRepository={null}
+          lastUpdatedAt="2021-10-01T12:00:00Z"
+          agentKind="acp"
+          acpServer="claude-code"
+          llmModel="claude-opus-4-7"
+        />,
+      );
+
+      expect(
+        screen.queryByTestId("conversation-card-agent-chip"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("hides the chip by default (LLM-model toggle off) for OpenHands", () => {
+      renderWithProviders(
+        <ConversationCard
+          title="Conversation 1"
+          selectedRepository={null}
+          lastUpdatedAt="2021-10-01T12:00:00Z"
+          agentKind="openhands"
+          llmModel="claude-sonnet-4"
+        />,
+      );
+
+      expect(
+        screen.queryByTestId("conversation-card-agent-chip"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("renders the brand mark + model for an ACP conversation with a model", () => {
+      // PR 730 wires ``current_model_name``/``current_model_id``/configured
+      // ``acp_model`` into ``llm_model`` on the adapter so ACP conversations
+      // arrive at the card with a concrete model string. With the chip toggle
+      // on, the chip shows the resolved Claude brand mark + that model text.
+      renderWithProviders(
+        <ConversationCard
+          title="Conversation 1"
+          selectedRepository={null}
+          lastUpdatedAt="2021-10-01T12:00:00Z"
+          showLlmProfiles
+          agentKind="acp"
+          acpServer="claude-code"
+          llmModel="raw-model-id"
+        />,
+      );
+
+      const chip = screen.getByTestId("conversation-card-agent-chip");
+      expect(chip).toHaveTextContent("raw-model-id");
+      expect(chip).toHaveAttribute("title", "Claude Code · raw-model-id");
+      expect(
+        within(chip).getByTestId("agent-brand-icon-claude-code"),
+      ).toBeInTheDocument();
+    });
+
+    it("shows the provider's picker label for a known model ID", () => {
+      // When ``llm_model`` is a registry-known ID, the chip renders the
+      // human label ("Claude Opus 4.8 (1M)") instead of the raw ID — matching
+      // what the Settings → Agent picker shows for the same value.
+      renderWithProviders(
+        <ConversationCard
+          title="Conversation 1"
+          selectedRepository={null}
+          lastUpdatedAt="2021-10-01T12:00:00Z"
+          showLlmProfiles
+          agentKind="acp"
+          acpServer="claude-code"
+          llmModel="opus[1m]"
+        />,
+      );
+
+      const chip = screen.getByTestId("conversation-card-agent-chip");
+      expect(chip).toHaveTextContent("Claude Opus 4.8 (1M)");
+      expect(chip).toHaveAttribute(
+        "title",
+        "Claude Code · Claude Opus 4.8 (1M)",
+      );
+    });
+
+    it("falls back to the provider display name for an ACP conversation with no model", () => {
+      // No ``llm_model`` (older agent-server, no SDK runtime fields, no
+      // configured ``acp_model``) — the chip still renders for identity, with
+      // the provider name as the text and the brand mark as the icon.
+      renderWithProviders(
+        <ConversationCard
+          title="Conversation 1"
+          selectedRepository={null}
+          lastUpdatedAt="2021-10-01T12:00:00Z"
+          showLlmProfiles
+          agentKind="acp"
+          acpServer="claude-code"
+        />,
+      );
+
+      const chip = screen.getByTestId("conversation-card-agent-chip");
+      expect(chip).toHaveTextContent("Claude Code");
+      expect(chip).toHaveAttribute("title", "Claude Code");
+      expect(
+        within(chip).getByTestId("agent-brand-icon-claude-code"),
+      ).toBeInTheDocument();
+    });
+
+    it("falls back to the generic terminal glyph when the server key is unknown", () => {
+      // ``custom`` (and any future ACP server Canvas doesn't know yet) maps
+      // to the fallback ``cli-generic`` icon and the generic "ACP" label.
+      renderWithProviders(
+        <ConversationCard
+          title="Conversation 1"
+          selectedRepository={null}
+          lastUpdatedAt="2021-10-01T12:00:00Z"
+          showLlmProfiles
+          agentKind="acp"
+          acpServer="custom"
+        />,
+      );
+
+      const chip = screen.getByTestId("conversation-card-agent-chip");
+      expect(chip).toHaveTextContent("ACP");
+      expect(
+        within(chip).getByTestId("agent-brand-icon-generic"),
+      ).toBeInTheDocument();
+    });
+
+    it("falls back to the generic terminal glyph when the server key is null", () => {
+      // ACP conversations missing the ``acpserver`` tag (older clients,
+      // raw API writes) still get a chip — identity first, exact provider
+      // second.
+      renderWithProviders(
+        <ConversationCard
+          title="Conversation 1"
+          selectedRepository={null}
+          lastUpdatedAt="2021-10-01T12:00:00Z"
+          showLlmProfiles
+          agentKind="acp"
+          acpServer={null}
+        />,
+      );
+
+      const chip = screen.getByTestId("conversation-card-agent-chip");
+      expect(chip).toHaveTextContent("ACP");
+      expect(
+        within(chip).getByTestId("agent-brand-icon-generic"),
+      ).toBeInTheDocument();
+    });
+
+    it("renders the OpenHands logo + model name for native conversations", () => {
+      // With the chip toggle on, OpenHands native conversations show the
+      // OpenHands logo + the raw ``agent.llm.model`` string. A stray
+      // ``acp_server`` value on an OpenHands card must not flip the icon to
+      // the Claude/Codex/Gemini brand mark.
+      renderWithProviders(
+        <ConversationCard
+          title="Conversation 1"
+          selectedRepository={null}
+          lastUpdatedAt="2021-10-01T12:00:00Z"
+          showLlmProfiles
+          agentKind="openhands"
+          acpServer="claude-code"
+          llmModel="claude-sonnet-4"
+        />,
+      );
+
+      const chip = screen.getByTestId("conversation-card-agent-chip");
+      expect(chip).toHaveTextContent("claude-sonnet-4");
+      expect(chip).toHaveAttribute("title", "claude-sonnet-4");
+      expect(
+        within(chip).getByTestId("agent-brand-icon-openhands"),
+      ).toBeInTheDocument();
+      expect(
+        within(chip).queryByTestId("agent-brand-icon-claude-code"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("hides the chip for OpenHands conversations with no model", () => {
+      // Toggle on, but no model string and no ACP server — nothing to
+      // display, so the chip collapses rather than showing a bare logo.
+      renderWithProviders(
+        <ConversationCard
+          title="Conversation 1"
+          selectedRepository={null}
+          lastUpdatedAt="2021-10-01T12:00:00Z"
+          showLlmProfiles
+          agentKind="openhands"
+          llmModel={null}
+        />,
+      );
+
+      expect(
+        screen.queryByTestId("conversation-card-agent-chip"),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("calls onTogglePin when the pin button is clicked", async () => {
+    const onTogglePin = vi.fn();
+    const user = userEvent.setup();
+
+    renderWithProviders(
+      <ConversationCard
+        title="Conversation 1"
+        selectedRepository={null}
+        lastUpdatedAt="2021-10-01T12:00:00Z"
+        conversationId="conversation-1"
+        onDelete={vi.fn()}
+        onTogglePin={onTogglePin}
+      />,
+    );
+
+    const card = screen.getByTestId("conversation-card");
+    await user.hover(card);
+    await user.click(
+      screen.getByTestId("conversation-pin-toggle-conversation-1"),
+    );
+    expect(onTogglePin).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the pin icon visible without hover when alwaysShowPinIcon is set", () => {
+    renderWithProviders(
+      <ConversationCard
+        title="Conversation 1"
+        selectedRepository={null}
+        lastUpdatedAt="2021-10-01T12:00:00Z"
+        conversationId="conversation-1"
+        onDelete={vi.fn()}
+        onTogglePin={vi.fn()}
+        isPinned
+        alwaysShowPinIcon
+      />,
+    );
+
+    expect(
+      screen.getByTestId("conversation-pin-toggle-conversation-1"),
+    ).toBeVisible();
+    expect(screen.getByRole("time")).toBeInTheDocument();
   });
 });

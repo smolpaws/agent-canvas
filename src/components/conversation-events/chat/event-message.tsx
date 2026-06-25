@@ -16,11 +16,13 @@ import {
   isPlanningFileEditorObservationEvent,
   isHookExecutionEvent,
   isACPToolCallEvent,
+  isStreamingDeltaEvent,
 } from "#/types/agent-server/type-guards";
 import { useConfig } from "#/hooks/query/use-config";
 import { useConversationStore } from "#/stores/conversation-store";
 import { useAgentState } from "#/hooks/use-agent-state";
 import { AgentState } from "#/types/agent-state";
+import { ChatMessage } from "#/components/features/chat/chat-message";
 import { PlanPreview } from "../../features/chat/plan-preview";
 import { ErrorEventMessage } from "./event-message-components/error-event-message";
 import { UserAssistantEventMessage } from "./event-message-components/user-assistant-event-message";
@@ -31,7 +33,7 @@ import { CollapsibleThinking } from "./event-message-components/collapsible-thin
 import { HookExecutionEventMessage } from "./event-message-components/hook-execution-event-message";
 import { createSkillReadyEvent } from "./event-content-helpers/create-skill-ready-event";
 import { shouldShowPlanPreview } from "./hooks/use-plan-preview-events";
-import { getReasoningContent } from "./event-thought-helpers";
+import { getReasoningContent, splitInlineThink } from "./event-thought-helpers";
 
 interface EventMessageProps {
   event: OpenHandsEvent & { isFromPlanningAgent?: boolean };
@@ -173,6 +175,29 @@ export function EventMessage({
   if (isACPToolCallEvent(event)) {
     return (
       <GenericEventMessageWrapper event={event} isLastMessage={isLastMessage} />
+    );
+  }
+
+  if (isStreamingDeltaEvent(event)) {
+    // Route an inline <think> block to the thinking section, not the bubble.
+    const { reasoning: inlineThink, message } = splitInlineThink(
+      event.content ?? "",
+      { streaming: true },
+    );
+    const reasoningContent = [event.reasoning_content ?? "", inlineThink]
+      .filter(Boolean)
+      .join("\n\n");
+    return (
+      <>
+        {reasoningContent && <CollapsibleThinking content={reasoningContent} />}
+        {message && (
+          <ChatMessage
+            type="agent"
+            message={message}
+            isFromPlanningAgent={isFromPlanningAgent}
+          />
+        )}
+      </>
     );
   }
 

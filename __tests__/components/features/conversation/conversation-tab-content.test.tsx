@@ -11,6 +11,7 @@ import {
 // Mock useConversationId hook
 let mockConversationId = "test-conversation-id-123";
 vi.mock("#/hooks/use-conversation-id", () => ({
+  useOptionalConversationId: () => ({ conversationId: "test-conversation-id" }),
   useConversationId: () => ({
     conversationId: mockConversationId,
   }),
@@ -32,12 +33,6 @@ vi.mock("#/routes/browser-tab", () => ({
     }
     return <div data-testid="browser-tab-content">Browser Tab Content</div>;
   },
-}));
-
-vi.mock("#/routes/vscode-tab", () => ({
-  default: () => (
-    <div data-testid="vscode-tab-content">VSCode Tab Content</div>
-  ),
 }));
 
 vi.mock("#/routes/planner-tab", () => ({
@@ -123,16 +118,6 @@ describe("ConversationTabContent", () => {
 
       await waitFor(() => {
         expect(screen.getByTestId("browser-tab-content")).toBeInTheDocument();
-      });
-    });
-
-    it("should render vscode tab when selected", async () => {
-      setSelectedTab("vscode");
-
-      render(<ConversationTabContent />, { wrapper: createWrapper() });
-
-      await waitFor(() => {
-        expect(screen.getByTestId("vscode-tab-content")).toBeInTheDocument();
       });
     });
 

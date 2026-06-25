@@ -151,7 +151,7 @@ describe("useNewConversationCommand", () => {
     await result.current.mutateAsync();
 
     await waitFor(() => {
-      // Format matches OpenHands' SaaS pattern: useTaskPolling unwraps
+      // Format matches OpenHands' cloud pattern: useTaskPolling unwraps
       // `task-{uuid}` and polls until READY, then redirects.
       expect(mockNavigate).toHaveBeenCalledWith("/conversations/task-task-789");
     });
@@ -195,10 +195,11 @@ describe("useNewConversationCommand", () => {
     });
     await result.current.mutateAsync();
 
-    // Assert — sandbox_id is the 8th positional argument; parent_conversation_id
+    // Assert — sandbox_id is the 9th positional argument; parent_conversation_id
     // and agent_type stay undefined because /new is NOT a sub-conversation.
     await waitFor(() => {
       expect(createSpy).toHaveBeenCalledWith(
+        undefined,
         undefined,
         undefined,
         undefined,

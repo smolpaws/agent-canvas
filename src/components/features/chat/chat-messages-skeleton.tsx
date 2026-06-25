@@ -1,4 +1,7 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
+import { cn } from "#/utils/utils";
+import { I18nKey } from "#/i18n/declaration";
 
 const SKELETON_PATTERN = [
   { width: "w-[25%]", height: "h-4", align: "justify-end" },
@@ -15,20 +18,22 @@ const SKELETON_PATTERN = [
 function SkeletonBlock({ width, height }: { width: string; height: string }) {
   return (
     <div
-      className={`rounded-md bg-foreground/5 animate-pulse ${width} ${height}`}
+      className={cn("rounded-md bg-foreground/5 animate-pulse", width, height)}
     />
   );
 }
 
 export function ChatMessagesSkeleton() {
+  const { t } = useTranslation("openhands");
+
   return (
     <div
       className="flex flex-col gap-6 p-4 w-full h-full overflow-hidden"
       data-testid="chat-messages-skeleton"
-      aria-label="Loading conversation"
+      aria-label={t(I18nKey.CHAT_INTERFACE$LOADING_CONVERSATION)}
     >
       {SKELETON_PATTERN.map((item, i) => (
-        <div key={i} className={`flex w-full ${item.align}`}>
+        <div key={i} className={cn("flex w-full", item.align)}>
           <SkeletonBlock width={item.width} height={item.height} />
         </div>
       ))}

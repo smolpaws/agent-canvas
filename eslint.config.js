@@ -140,9 +140,71 @@ export default [
       "prettier/prettier": "error",
 
       // Project conventions previously enforced via airbnb / custom rules.
-      "i18next/no-literal-string": "error",
+      // Lint JSX *attributes* (not just text between tags) for hard-coded
+      // user-facing strings. The plugin default (`mode: 'jsx-text-only'`)
+      // never checks attribute values, which let untranslated strings like
+      // `aria-label="Close"` / `placeholder="..."` slip past lint (cf. #1306).
+      //
+      // `jsx-only` checks every literal inside a JSX subtree, so we scope it:
+      //  - jsx-attributes.include: only attributes that carry translatable
+      //    text. Everything else (testId, name, color, to, href, className,
+      //    data-*, …) is ignored automatically — no brittle deny-list.
+      //  - callees/object-properties: re-list the plugin defaults (the option
+      //    merge is shallow, so providing a key replaces it) and add
+      //    `cn`/`className` so Tailwind class strings built via `cn(...)` or
+      //    `{ className: "..." }` aren't flagged.
+      "i18next/no-literal-string": [
+        "error",
+        {
+          mode: "jsx-only",
+          "jsx-attributes": {
+            include: [
+              "placeholder",
+              "alt",
+              "aria-label",
+              "title",
+              "label",
+              "heading",
+              "text",
+            ],
+          },
+          callees: {
+            exclude: [
+              "i18n(ext)?",
+              "t",
+              "require",
+              "addEventListener",
+              "removeEventListener",
+              "postMessage",
+              "getElementById",
+              "dispatch",
+              "commit",
+              "includes",
+              "indexOf",
+              "endsWith",
+              "startsWith",
+              "cn",
+            ],
+          },
+          "object-properties": {
+            exclude: ["[A-Z_-]+", "className"],
+          },
+        },
+      ],
       "unused-imports/no-unused-imports": "error",
       "@typescript-eslint/prefer-optional-chain": "error",
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@openhands/typescript-client/client/http-client",
+              message:
+                "Use typed @openhands/typescript-client clients instead of constructing HttpClient directly.",
+            },
+          ],
+        },
+      ],
 
       // Allow `interface Foo extends Bar<"foo"> {}` — the codebase uses this
       // discriminated-union pattern in `src/types/agent-server/**` and the
@@ -229,6 +291,16 @@ export default [
             "Property[key.name='queryKey'] > ArrayExpression[elements.0.value='settings']",
           message:
             "Use SETTINGS_QUERY_KEYS helpers instead of raw settings query key arrays.",
+        },
+        {
+          selector:
+            "CallExpression[callee.name='t'] > Literal:first-child[value=/^[A-Z0-9_]+\\$/]",
+          message: "Use I18nKey instead of raw translation key strings.",
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name='t'] > Literal:first-child[value=/^[A-Z0-9_]+\\$/]",
+          message: "Use I18nKey instead of raw translation key strings.",
         },
       ],
       "react/require-default-props": "off",

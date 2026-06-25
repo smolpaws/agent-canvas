@@ -9,6 +9,7 @@ interface ContextMenuIconTextWithDescriptionProps {
   description: string;
   className?: string;
   iconClassName?: string;
+  isActive?: boolean;
 }
 
 export function ContextMenuIconTextWithDescription({
@@ -17,11 +18,12 @@ export function ContextMenuIconTextWithDescription({
   description,
   className,
   iconClassName,
+  isActive = false,
 }: ContextMenuIconTextWithDescriptionProps) {
   return (
     <div
       className={cn(
-        "flex flex-col gap-1 justify-center hover:bg-[var(--oh-interactive-hover)] rounded p-2",
+        "flex min-w-0 w-full flex-col justify-center gap-1",
         className,
       )}
     >
@@ -30,6 +32,7 @@ export function ContextMenuIconTextWithDescription({
         text={title}
         className="px-0"
         iconClassName={iconClassName}
+        isActive={isActive}
       />
       <Typography.Text className="text-[var(--oh-muted)] text-[10px] font-normal whitespace-pre-wrap break-words">
         {description}
